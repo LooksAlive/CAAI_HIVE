@@ -1,0 +1,75 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="CAAI.MainMenuWidget">
+    
+    <Border Background="#2D2D2D" BorderBrush="#1A1A1A" BorderThickness="0,0,0,1">
+        <Menu Background="Transparent" Foreground="White">
+            
+            <MenuItem Header="_File" Foreground="White">
+                <MenuItem Header="New _Notebook" InputGesture="Ctrl+Shift+N" Name="MenuNewNotebook" Foreground="White"/>
+                <MenuItem Header="_New Project" InputGesture="Ctrl+N" Name="MenuNewProject" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="_Open File..." InputGesture="Ctrl+O" Name="MenuOpenFile" Foreground="White"/>
+                <MenuItem Header="Open P_roject..." InputGesture="Ctrl+Shift+O" Name="MenuOpenProject" Foreground="White"/>
+                
+                <MenuItem Header="Open _Recent" Foreground="White">
+                    <MenuItem Header="~/Desktop/HIVE" Name="MenuRecent1" Foreground="Gray"/>
+                    <MenuItem Header="~/Projects/CAAI_Core" Name="MenuRecent2" Foreground="Gray"/>
+                    <Separator/>
+                    <MenuItem Header="Clear Recent List" Name="MenuClearRecent" Foreground="White"/>
+                </MenuItem>
+                
+                <Separator/>
+                <MenuItem Header="_Save" InputGesture="Ctrl+S" Name="MenuSaveFile" Foreground="White"/>
+                <MenuItem Header="Save _All" InputGesture="Ctrl+Shift+S" Name="MenuSaveAll" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="E_xit" InputGesture="Alt+F4" Name="MenuExit" Foreground="White"/>
+            </MenuItem>
+
+            <MenuItem Header="_Edit" Foreground="White">
+                <MenuItem Header="_Undo" InputGesture="Ctrl+Z" Name="MenuUndo" Foreground="White"/>
+                <MenuItem Header="_Redo" InputGesture="Ctrl+Y" Name="MenuRedo" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="Cu_t" InputGesture="Ctrl+X" Name="MenuCut" Foreground="White"/>
+                <MenuItem Header="_Copy" InputGesture="Ctrl+C" Name="MenuCopy" Foreground="White"/>
+                <MenuItem Header="_Paste" InputGesture="Ctrl+V" Name="MenuPaste" Foreground="White"/>
+                <Separator/>
+                
+                <MenuItem Header="_Advanced" Foreground="White">
+                    <MenuItem Header="Toggle Line Comment" InputGesture="Ctrl+OemQuestion" Name="MenuToggleComment" Foreground="White"/>
+                    <MenuItem Header="Format Document" InputGesture="Ctrl+Shift+I" Name="MenuFormatDoc" Foreground="White"/>
+                </MenuItem>
+            </MenuItem>
+
+            <MenuItem Header="_View" Foreground="White">
+                <MenuItem Header="📁 File Explorer" ToggleType="CheckBox" IsChecked="True" Name="MenuToggleExplorer" Foreground="White"/>
+                <MenuItem Header="📐 Code Structure" ToggleType="CheckBox" IsChecked="True" Name="MenuToggleStructure" Foreground="White"/>
+                <MenuItem Header="📋 Output Window" ToggleType="CheckBox" IsChecked="True" Name="MenuToggleOutput" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="Word Wrap" ToggleType="CheckBox" IsChecked="False" Name="MenuToggleWordWrap" Foreground="White"/>
+            </MenuItem>
+
+            <MenuItem Header="_Run" Foreground="White">
+                <MenuItem Header="_Start Debugging" InputGesture="F5" Name="MenuRunProject" Foreground="White"/>
+                <MenuItem Header="Run _Without Debugging" InputGesture="Ctrl+F5" Name="MenuRunNoDebug" Foreground="White"/>
+                <MenuItem Header="Step _Into" InputGesture="F11" Name="MenuStepInto" Foreground="White"/>
+                <MenuItem Header="Step _Over" InputGesture="F10" Name="MenuStepOver" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="Toggle Breakpoint" InputGesture="F9" Name="MenuToggleBreakpoint" Foreground="White"/>
+            </MenuItem>
+
+            <MenuItem Header="_Tools" Foreground="White">
+                <MenuItem Header="NuGet Package Manager" Name="MenuNuget" Foreground="White"/>
+                <MenuItem Header="Options / Settings" Name="MenuSettings" Foreground="White"/>
+            </MenuItem>
+
+            <MenuItem Header="_Help" Foreground="White">
+                <MenuItem Header="View Documentation" Name="MenuDocs" Foreground="White"/>
+                <MenuItem Header="Report an Issue" Name="MenuReportIssue" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="_About CAAI" Name="MenuAbout" Foreground="White"/>
+            </MenuItem>
+            
+        </Menu>
+    </Border>
+</UserControl>
