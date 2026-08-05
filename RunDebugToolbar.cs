@@ -6,7 +6,7 @@ using System.Diagnostics;
 
 namespace CAAI;
 
-public class DotnetRunner(OutputPanel outputPanel)
+public class DotnetRunner(TerminalWidget outputPanel)
 {
     private Process? _process;
 	

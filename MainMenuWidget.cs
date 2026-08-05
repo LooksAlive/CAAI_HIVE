@@ -26,7 +26,6 @@ public partial class MainMenuWidget : UserControl
     // Use Action<bool> to pass the checked state directly 
     public event Action<bool>? OnToggleExplorer;
     public event Action<bool>? OnToggleStructure;
-    public event Action<bool>? OnToggleOutput;
     public event Action<bool>? OnToggleWordWrap;
 
     public event Action? OnRunProject;
@@ -68,7 +67,6 @@ public partial class MainMenuWidget : UserControl
         // === View Subscriptions (Passing state safely) ===
         MenuToggleExplorer.Click += (s, e) => OnToggleExplorer?.Invoke(MenuToggleExplorer.IsChecked);
         MenuToggleStructure.Click += (s, e) => OnToggleStructure?.Invoke(MenuToggleStructure.IsChecked);
-        MenuToggleOutput.Click   += (s, e) => OnToggleOutput?.Invoke(MenuToggleOutput.IsChecked);
         MenuToggleWordWrap.Click += (s, e) => OnToggleWordWrap?.Invoke(MenuToggleWordWrap.IsChecked);
 
         // === Run / Debug Subscriptions ===

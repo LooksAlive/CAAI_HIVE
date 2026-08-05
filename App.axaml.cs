@@ -172,7 +172,7 @@ public class MainWindow : Window
 			Foreground = Brushes.White,
 			TabStripPlacement = Dock.Top
 		};
-    private TabControl _sideTabs = null!;
+    private DockPanel _sideTabs = null!;
 	private readonly CodeStructureWidget _structureTree = new();
 	private FileExplorerWidget _filesTreeView = null!;
 	private readonly ObjectInspectorWidget1 _inspector = new();
@@ -181,7 +181,6 @@ public class MainWindow : Window
 	private ProjectId _projectId = null!;
 	private readonly RunDebugToolbar _toolbar = new();
 	private readonly DiagnosticsPanel _diagnosticsPanel = new();
-	private readonly OutputPanel _outputPanel = new ();
     private NuGetPackageManager _nuGetPackageManager = null!;
     private TerminalWidget _terminal = null!;
 	private readonly MainMenuWidget _menu = new();
@@ -198,7 +197,7 @@ public class MainWindow : Window
 
 	SyntaxTree? currentSyntaxTree = null;
 
-	private static string _baseDir = "/home/adam/Desktop/HIVE";
+	private static string _baseDir = "C:\\Users\\A200542365\\OneDrive - Deutsche Telekom AG\\Desktop\\CAAI_HIVE";
 	public CodeWatcher CodeWatcher = new CodeWatcher(_baseDir, file =>
 	{
 		Console.WriteLine($"Changed: {file}");
@@ -537,7 +536,7 @@ public class MainWindow : Window
                 new ColumnDefinition(new GridLength(1, GridUnitType.Star))   // Editor column
             }
 		};
-
+		/*
 		// Left panel (Files, Structure, Hierarchy, Inspector, Environment, AST Viewer)
 		_sideTabs = new TabControl
 		{
@@ -556,6 +555,48 @@ public class MainWindow : Window
 				new TabItem { Header = "🌳 AST", Content = _astViewer }
 			}
 		};
+		*/
+
+		var views = new Dictionary<string, Control>
+		{
+			{ "📁 Files", _filesTreeView },
+			{ "📐 Structure", _structureTree },
+			{ "🌲 Hierarchy", _hierarchyTree },
+			{ "🔍 Inspector", _inspector },
+			{ "⚙️ Environment", _env },
+			{ "🌳 AST", _astViewer }
+		};
+
+		var selector = new ComboBox
+		{
+			ItemsSource = views.Keys.ToList(),
+			SelectedIndex = 0,
+			Margin = new Thickness(4)
+		};
+
+		var content = new ContentControl
+		{
+			Content = views.Values.First(),
+			HorizontalAlignment = HorizontalAlignment.Stretch,
+			VerticalAlignment = VerticalAlignment.Stretch
+		};
+
+		selector.SelectionChanged += (_, _) =>
+		{
+			if (selector.SelectedItem is string key)
+				content.Content = views[key];
+		};
+
+		_sideTabs = new DockPanel();
+
+		DockPanel.SetDock(selector, Dock.Top);
+		_sideTabs.Children.Add(selector);
+		_sideTabs.Children.Add(content);
+
+
+
+
+
 
 		// Left splitter
 		var leftSplitter = new GridSplitter
@@ -591,10 +632,9 @@ public class MainWindow : Window
 			TabStripPlacement = Dock.Top
 		};
 
-        _nuGetPackageManager = new NuGetPackageManager(_workspace);
+        _nuGetPackageManager = new NuGetPackageManager(_notificationManager, _workspace);
         _terminal = new TerminalWidget(_baseDir);
 
-		outputTabs.Items.Add(new TabItem { Header = "📋 Output", Content = _outputPanel });
 		outputTabs.Items.Add(new TabItem { Header = "⚠️ Diagnostics", Content = _diagnosticsPanel });
         outputTabs.Items.Add(new TabItem { Header = "👨‍💻 Terminal", Content = _terminal });
         outputTabs.Items.Add(new TabItem { Header = "📦 NuGet", Content = _nuGetPackageManager });
@@ -635,8 +675,9 @@ public class MainWindow : Window
 		Height = 800;
 
 		InitializeRoslyn();
+		SetupLiveDiagnostics();
 		
-		_runner = new DotnetRunner(_outputPanel);
+		_runner = new DotnetRunner(_terminal);
 
 		// Setup toolbar events
 		_toolbar.OnRunRequested += () => _runner.Run(_baseDir);
@@ -673,7 +714,7 @@ public class MainWindow : Window
 
 		// Open initial file
 		//_structureTree._treeView.ItemsSource = OpenFile("/home/adam/Desktop/HIVE/Program.cs");
-		currentSyntaxTree = OpenFile("/home/adam/Desktop/HIVE/Program.cs");
+		currentSyntaxTree = OpenFile(_baseDir + "\\Program.cs");
 
         SetupEnvironment();
 		SetupStructureTree();
@@ -764,7 +805,17 @@ public class MainWindow : Window
             else
             {
                 // Show error or remove from recent
-                _outputPanel.AppendOutput($"[Warning] Recent file not found: {path}");
+				var toast = new Notification(
+					title: "Warning",
+					message: $"[Warning] Recent file not found: {path}",
+					type: NotificationType.Warning,
+					expiration: TimeSpan.FromSeconds(5),
+					onClick: () => Console.WriteLine("User clicked the notification!"),
+					onClose: () => Console.WriteLine("Notification dismissed.")
+				);
+
+				// Send to the manager screen container
+				_notificationManager.Show(toast);
             }
         };
         _menu.OnClearRecentRequested += () =>
@@ -780,7 +831,17 @@ public class MainWindow : Window
                 if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
                 {
                     File.WriteAllText(editor.FilePath, editor._editor.Text);
-                    _outputPanel.AppendOutput($"[Saved] {Path.GetFileName(editor.FilePath)}");
+					var toast = new Notification(
+					title: "Info",
+					message: $"[Saved] {Path.GetFileName(editor.FilePath)}",
+					type: NotificationType.Information,
+					expiration: TimeSpan.FromSeconds(5),
+					onClick: () => Console.WriteLine("User clicked the notification!"),
+					onClose: () => Console.WriteLine("Notification dismissed.")
+				);
+
+				// Send to the manager screen container
+				_notificationManager.Show(toast);
                 }
             }
         };
@@ -794,7 +855,18 @@ public class MainWindow : Window
                     File.WriteAllText(editor.FilePath, editor._editor.Text);
                 }
             }
-            _outputPanel.AppendOutput("[Saved] All files saved");
+			// Show error or remove from recent
+			var toast = new Notification(
+				title: "Info",
+				message: "[Saved] All files saved",
+				type: NotificationType.Information,
+				expiration: TimeSpan.FromSeconds(5),
+				onClick: () => Console.WriteLine("User clicked the notification!"),
+				onClose: () => Console.WriteLine("Notification dismissed.")
+			);
+
+			// Send to the manager screen container
+			_notificationManager.Show(toast);
         };
         _menu.OnExit += Close;
 
@@ -877,10 +949,6 @@ public class MainWindow : Window
                 structurePanel.IsVisible = isChecked;
             }
         };
-        _menu.OnToggleOutput += (isChecked) =>
-        {
-            _outputPanel.IsVisible = isChecked;
-        };
         _menu.OnToggleWordWrap += (isChecked) =>
         {
             if (_tabs.SelectedItem is TabItem tab)
@@ -899,12 +967,11 @@ public class MainWindow : Window
         _menu.OnStepInto += () =>
         {
             // TODO: Implement debugger step-into
-            _outputPanel.AppendOutput("[Debug] Step Into not yet implemented");
+            
         };
         _menu.OnStepOver += () =>
         {
             // TODO: Implement debugger step-over
-            _outputPanel.AppendOutput("[Debug] Step Over not yet implemented");
         };
         _menu.OnToggleBreakpoint += () =>
         {
@@ -915,7 +982,17 @@ public class MainWindow : Window
                 {
                     var line = editor._editor.Document.GetLineByOffset(editor._editor.CaretOffset).LineNumber;
                     // TODO: Toggle breakpoint at line
-                    _outputPanel.AppendOutput($"[Debug] Breakpoint toggled at line {line}");
+					var toast = new Notification(
+						title: "Info",
+						message: $"[Debug] Breakpoint toggled at line {line}",
+						type: NotificationType.Information,
+						expiration: TimeSpan.FromSeconds(5),
+						onClick: () => Console.WriteLine("User clicked the notification!"),
+						onClose: () => Console.WriteLine("Notification dismissed.")
+					);
+
+					// Send to the manager screen container
+					_notificationManager.Show(toast);
                 }
             }
         };
@@ -1267,11 +1344,10 @@ public class MainWindow : Window
 			var diagnostics = semanticModel.GetDiagnostics();
 
 			// 3. Update the UI
-			_outputPanel.ClearOutput();
 			foreach (var diag in diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
 			{
 				string location = diag.Location.GetLineSpan().StartLinePosition.ToString();
-				_outputPanel.AppendOutput($"[{diag.Severity}] Line {location}: {diag.GetMessage()}");
+				//_outputPanel.AppendOutput($"[{diag.Severity}] Line {location}: {diag.GetMessage()}");
 			}
 
 			return diagnostics.ToList();
@@ -1324,7 +1400,7 @@ public class MainWindow : Window
 	{
 		_workspace.RegisterWorkspaceChangedHandler(async (sender) =>
 		{
-			await Task.Delay(500);
+			await Task.Delay(1000);
 			if (sender.DocumentId == null) return;
 			var diagnostics = await GetDiagnosticsForDocument(sender.DocumentId);
 			var items = diagnostics
@@ -1526,6 +1602,16 @@ public class MainWindow : Window
 	{
 	    // Update the document in the workspace if needed
 	    // The formatting is already done in the editor
-	    _outputPanel.AppendOutput("Document formatted", OutputType.Success);
+		var toast = new Notification(
+			title: "Info",
+			message: "Document formatted",
+			type: NotificationType.Information,
+			expiration: TimeSpan.FromSeconds(5),
+			onClick: () => Console.WriteLine("User clicked the notification!"),
+			onClose: () => Console.WriteLine("Notification dismissed.")
+		);
+
+		// Send to the manager screen container
+		_notificationManager.Show(toast);
 	}
 }

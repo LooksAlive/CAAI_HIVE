@@ -1,11 +1,14 @@
 using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Notifications;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -14,6 +17,13 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.CodeAnalysis;
+
+using NuGet.Common;
+using NuGet.Configuration;
+using NuGet.Protocol;
+using NuGet.Protocol.Core.Types;
+using NuGet.Versioning;
+
 
 namespace CAAI;
 
@@ -24,7 +34,7 @@ public class NuGetPackage : INotifyPropertyChanged
         public string Version { get; set; } = "";
         public string Description { get; set; } = "";
         public string Authors { get; set; } = "";
-        public long Downloads { get; set; }
+        public long? Downloads { get; set; }
 
         public bool IsInstalled
         {
@@ -55,10 +65,12 @@ public class NuGetPackageManager : UserControl
     public event EventHandler<NuGetPackage>? PackageInstallRequested;
     public event EventHandler<NuGetPackage>? PackageUninstallRequested;
     public event EventHandler<string>? OutputAppended;
+    private WindowNotificationManager notificationManager;
 
-    public NuGetPackageManager(AdhocWorkspace? workspace = null)
+    public NuGetPackageManager(WindowNotificationManager _notificationManager, AdhocWorkspace? workspace = null)
     {
         _workspace = workspace;
+        notificationManager = _notificationManager;
         BuildUI();
         LoadInstalledPackages();
     }
@@ -230,7 +242,7 @@ public class NuGetPackageManager : UserControl
             Foreground = Brushes.White,
             ItemsSource = _packages,
             SelectionMode = SelectionMode.Single,
-            Margin = new Thickness(0, 5)
+            //Margin = new Thickness(0, 5)
         };
 
         list.ItemTemplate = new FuncDataTemplate<NuGetPackage>((pkg, _) =>
@@ -240,8 +252,8 @@ public class NuGetPackageManager : UserControl
 
             var border = new Border
             {
-                Padding = new Thickness(10, 8),
-                Margin = new Thickness(0, 1, 0, 1),
+                //Padding = new Thickness(0, 0),
+                //Margin = new Thickness(0, 0, 0, 0),
                 Background = pkg.IsInstalled ? 
                     new SolidColorBrush(Color.FromArgb(40, 0, 200, 0)) : 
                     Brushes.Transparent
@@ -308,9 +320,9 @@ public class NuGetPackageManager : UserControl
                 var badge = new Border
                 {
                     Background = new SolidColorBrush(Color.FromRgb(0, 150, 0)),
-                    CornerRadius = new CornerRadius(10),
-                    Padding = new Thickness(8, 2),
-                    Margin = new Thickness(10, 0, 0, 0),
+                    //CornerRadius = new CornerRadius(10),
+                    //Padding = new Thickness(8, 2),
+                    //Margin = new Thickness(10, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 badge.Child = new TextBlock
@@ -377,6 +389,79 @@ public class NuGetPackageManager : UserControl
         await SearchNuGetPackages(searchTerm);
     }
 
+    public async Task InstallPackage(string project,
+                                 string id,
+                                 string version)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            Arguments =
+                $"add \"{project}\" package {id} --version {version}",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        using var process = Process.Start(psi);
+        if(process == null)
+        {
+            ShowNotification("Installation error", "Installation raised an error", NotificationType.Error);
+            return;
+        }
+
+        await process.WaitForExitAsync();
+        ShowNotification("Install completed", "Install completed successfully");
+    }
+
+    public async Task<List<NuGetPackage>> GetInstalledPackages(string projectFile)
+    {
+        var doc = XDocument.Load(projectFile);
+
+        return doc.Descendants("PackageReference")
+                .Select(x => new NuGetPackage
+                {
+                    Id = x.Attribute("Include")?.Value ?? "",
+                    Version = x.Attribute("Version")?.Value ?? "",
+                    IsInstalled = true
+                })
+                .ToList();
+    }
+
+    private SourceRepository _repository;
+
+    public void todocosntructor()
+    {
+        var providers = Repository.Provider.GetCoreV3();
+
+        _repository = new SourceRepository(
+            new PackageSource("https://api.nuget.org/v3/index.json"),
+            providers);
+    }
+
+    public async Task<List<NuGetPackage>> SearchAsync(string search)
+    {
+        var resource =
+            await _repository.GetResourceAsync<PackageSearchResource>();
+
+        var results =
+            await resource.SearchAsync(
+                search,
+                new SearchFilter(false),
+                0,
+                50,
+                NullLogger.Instance,
+                CancellationToken.None);
+
+        return results.Select(p => new NuGetPackage
+        {
+            Id = p.Identity.Id,
+            Version = p.Identity.Version.ToNormalizedString(),
+            Description = p.Description,
+            Authors = string.Join(", ", p.Authors),
+            Downloads = p.DownloadCount
+        }).ToList();
+    }
+
     private async Task SearchNuGetPackages(string searchTerm)
     {
         _isLoading = true;
@@ -422,7 +507,7 @@ public class NuGetPackageManager : UserControl
         var installed = new[]
         {
             new NuGetPackage 
-            { 
+            {
                 Id = "Avalonia", 
                 Version = "11.0.0", 
                 Description = "Cross-platform UI framework for .NET",
@@ -575,6 +660,22 @@ public class NuGetPackageManager : UserControl
         
         await dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
         return result;
+    }
+
+    private void ShowNotification(String title, String message, NotificationType notif_type = NotificationType.Success)
+    {
+	    // Build a built-in Notification object
+        var toast = new Notification(
+            title: title,
+            message: message,
+            type: notif_type,
+            expiration: TimeSpan.FromSeconds(5),
+            onClick: () => Console.WriteLine(title),
+            onClose: () => Console.WriteLine(message)
+        );
+
+        // Send to the manager screen container
+        notificationManager.Show(toast);
     }
 
     // Simulated NuGet search - replace with actual NuGet.Protocol API
