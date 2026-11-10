@@ -274,7 +274,7 @@ public class CodeEditor : UserControl
         }
     }
     
-    private void Editor_KeyDown(object? sender, KeyEventArgs e)
+    private async void Editor_KeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
@@ -310,7 +310,7 @@ public class CodeEditor : UserControl
                  e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
             // Ctrl+Shift+R - Find References
-            FindReferences();
+            await FindReferences();
             e.Handled = true;
         }
         else if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control) && 

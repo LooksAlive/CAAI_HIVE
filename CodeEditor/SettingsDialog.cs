@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Input;
 using System;
 using System.Collections.Generic;
@@ -106,9 +107,8 @@ public class SettingsData
 public class SettingsDialog : Window
 {
     private SettingsData _settings;
-    private TabControl _tabControl;
+    private TabControl _tabControl = null!;
     private readonly string _settingsPath;
-    private bool _isDirty;
 
     public SettingsDialog(SettingsData settings, string settingsPath)
     {
@@ -356,10 +356,13 @@ public class SettingsDialog : Window
         };
         browseBtn.Click += async (_, _) =>
         {
-            var dialog = new OpenFolderDialog { Title = "Select Build Output Folder" };
-            var result = await dialog.ShowAsync(this);
-            if (!string.IsNullOrEmpty(result))
-                pathBox.Text = result;
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select Build Output Folder",
+                AllowMultiple = false
+            });
+            if (folders.Count > 0)
+                pathBox.Text = folders[0].Path.LocalPath;
         };
 
         browsePanel.Children.Add(pathBox);
@@ -447,10 +450,13 @@ public class SettingsDialog : Window
         };
         browseBtn.Click += async (_, _) =>
         {
-            var dialog = new OpenFolderDialog { Title = "Select Notebook Folder" };
-            var result = await dialog.ShowAsync(this);
-            if (!string.IsNullOrEmpty(result))
-                pathBox.Text = result;
+            var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+            {
+                Title = "Select Notebook Folder",
+                AllowMultiple = false
+            });
+            if (folders.Count > 0)
+                pathBox.Text = folders[0].Path.LocalPath;
         };
 
         browsePanel.Children.Add(pathBox);
@@ -547,7 +553,6 @@ public class SettingsDialog : Window
         clearRecentBtn.Click += (_, _) =>
         {
             _settings.RecentProjects = null;
-            _isDirty = true;
         };
         clearRecentPanel.Children.Add(clearRecentBtn);
 

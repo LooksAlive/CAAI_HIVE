@@ -56,7 +56,7 @@ public class FileSystemNode : INotifyPropertyChanged
 
         if (IsDirectory)
         {
-            Children.Add(null); // Dummy child to show expander
+            Children.Add(null!); // Dummy child to show expander
         }
     }
 
@@ -81,7 +81,7 @@ public class FileSystemNode : INotifyPropertyChanged
         _hasLoaded = false;
         Children.Clear();
         if (IsDirectory)
-            Children.Add(null);
+            Children.Add(null!);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -273,19 +273,19 @@ public class FileExplorerWidget : UserControl
         var newMenu = new MenuItem { Header = "🆕 New" };
         
         var newFile = new MenuItem { Header = "📄 C# Class" };
-        newFile.Click += (_, _) => CreateNewClass(node);
+        newFile.Click += async (_, _) => await CreateNewClass(node);
         
         var newFolder = new MenuItem { Header = "📁 Folder" };
-        newFolder.Click += (_, _) => CreateNewFolder(node);
+        newFolder.Click += async (_, _) => await CreateNewFolder(node);
         
         var newInterface = new MenuItem { Header = "🔷 Interface" };
-        newInterface.Click += (_, _) => CreateNewInterface(node);
+        newInterface.Click += async (_, _) => await CreateNewInterface(node);
         
         var newStruct = new MenuItem { Header = "📗 Struct" };
-        newStruct.Click += (_, _) => CreateNewStruct(node);
+        newStruct.Click += async (_, _) => await CreateNewStruct(node);
         
         var newEnum = new MenuItem { Header = "🔢 Enum" };
-        newEnum.Click += (_, _) => CreateNewEnum(node);
+        newEnum.Click += async (_, _) => await CreateNewEnum(node);
         
         newMenu.Items.Add(newFile);
         newMenu.Items.Add(newFolder);
@@ -317,23 +317,23 @@ public class FileExplorerWidget : UserControl
 
         // Rename
         var renameItem = new MenuItem { Header = "✏️ Rename" };
-        renameItem.Click += (_, _) => RenameNode(node);
+        renameItem.Click += async (_, _) => await RenameNode(node);
         menu.Items.Add(renameItem);
 
         // Delete
         var deleteItem = new MenuItem { Header = "🗑 Delete", Foreground = Brushes.Red };
-        deleteItem.Click += (_, _) => DeleteNode(node);
+        deleteItem.Click += async (_, _) => await DeleteNode(node);
         menu.Items.Add(deleteItem);
         menu.Items.Add(new Separator());
 
         // Copy path
         var copyPathItem = new MenuItem { Header = "📋 Copy Path" };
-        copyPathItem.Click += (_, _) => CopyPath(node.FullPath);
+        copyPathItem.Click += async (_, _) => await CopyPath(node.FullPath);
         menu.Items.Add(copyPathItem);
 
         // Properties
         var propertiesItem = new MenuItem { Header = "ℹ️ Properties" };
-        propertiesItem.Click += (_, _) => ShowProperties(node);
+        propertiesItem.Click += async (_, _) => await ShowProperties(node);
         menu.Items.Add(propertiesItem);
 
         // Refresh (for directories)
@@ -352,9 +352,10 @@ public class FileExplorerWidget : UserControl
     {
         var targetDir = parentNode.IsDirectory ? parentNode.FullPath : Path.GetDirectoryName(parentNode.FullPath);
         if (string.IsNullOrEmpty(targetDir)) return;
+        if (GetOwnerWindow() is not { } owner) return;
 
         var dialog = new CreateFileDialog(targetDir, "Class", GetClassTemplate());
-        var result = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var result = await dialog.ShowDialog(owner);
     
         if (!string.IsNullOrEmpty(result))
         {
@@ -370,9 +371,10 @@ public class FileExplorerWidget : UserControl
     {
         var targetDir = parentNode.IsDirectory ? parentNode.FullPath : Path.GetDirectoryName(parentNode.FullPath);
         if (string.IsNullOrEmpty(targetDir)) return;
+        if (GetOwnerWindow() is not { } owner) return;
 
         var dialog = new InputDialog("New Folder", "Enter folder name:", "NewFolder");
-        var result = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var result = await dialog.ShowDialog(owner);
     
         if (!string.IsNullOrEmpty(result))
         {
@@ -386,9 +388,10 @@ public class FileExplorerWidget : UserControl
     {
         var targetDir = parentNode.IsDirectory ? parentNode.FullPath : Path.GetDirectoryName(parentNode.FullPath);
         if (string.IsNullOrEmpty(targetDir)) return;
+        if (GetOwnerWindow() is not { } owner) return;
 
         var dialog = new CreateFileDialog(targetDir, "Interface", GetInterfaceTemplate());
-        var result = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var result = await dialog.ShowDialog(owner);
         
         if (!string.IsNullOrEmpty(result))
         {
@@ -402,9 +405,10 @@ public class FileExplorerWidget : UserControl
     {
         var targetDir = parentNode.IsDirectory ? parentNode.FullPath : Path.GetDirectoryName(parentNode.FullPath);
         if (string.IsNullOrEmpty(targetDir)) return;
+        if (GetOwnerWindow() is not { } owner) return;
 
         var dialog = new CreateFileDialog(targetDir, "Struct", GetStructTemplate());
-        var result = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var result = await dialog.ShowDialog(owner);
         
         if (!string.IsNullOrEmpty(result))
         {
@@ -418,9 +422,10 @@ public class FileExplorerWidget : UserControl
     {
         var targetDir = parentNode.IsDirectory ? parentNode.FullPath : Path.GetDirectoryName(parentNode.FullPath);
         if (string.IsNullOrEmpty(targetDir)) return;
+        if (GetOwnerWindow() is not { } owner) return;
 
         var dialog = new CreateFileDialog(targetDir, "Enum", GetEnumTemplate());
-        var result = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var result = await dialog.ShowDialog(owner);
         
         if (!string.IsNullOrEmpty(result))
         {
@@ -432,8 +437,9 @@ public class FileExplorerWidget : UserControl
 
     private async Task RenameNode(FileSystemNode node)
     {
+        if (GetOwnerWindow() is not { } owner) return;
         var dialog = new InputDialog("Rename", "Enter new name:", node.Name);
-        var newName = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var newName = await dialog.ShowDialog(owner);
         
         if (!string.IsNullOrEmpty(newName) && newName != node.Name)
         {
@@ -446,7 +452,8 @@ public class FileExplorerWidget : UserControl
                     File.Move(node.FullPath, newPath);
                 
                 OnFileRenamed?.Invoke(node.FullPath, newPath);
-                RefreshNode(FindParentNode(node));
+                if (FindParentNode(node) is { } parent)
+                    RefreshNode(parent);
             }
             catch (Exception ex)
             {
@@ -470,8 +477,8 @@ public class FileExplorerWidget : UserControl
                     File.Delete(node.FullPath);
                 
                 OnFileDeleted?.Invoke(node.FullPath);
-                var parent = FindParentNode(node);
-                RefreshNode(parent);
+                if (FindParentNode(node) is { } parent)
+                    RefreshNode(parent);
             }
             catch (Exception ex)
             {
@@ -587,14 +594,14 @@ public class FileExplorerWidget : UserControl
         }
     }
 
-    private void OnTreeKeyDown(object? sender, KeyEventArgs e)
+    private async void OnTreeKeyDown(object? sender, KeyEventArgs e)
     {
         if (_treeView.SelectedItem is FileSystemNode node)
         {
             if (e.Key == Key.F2)
-                RenameNode(node);
+                await RenameNode(node);
             else if (e.Key == Key.Delete)
-                DeleteNode(node);
+                await DeleteNode(node);
             else if (e.Key == Key.Enter && !node.IsDirectory)
                 OnFileOpened?.Invoke(node.FullPath);
         }
@@ -652,22 +659,27 @@ namespace {{Namespace}}
 
     private async Task<bool> ShowConfirmDialog(string title, string message)
     {
+        if (GetOwnerWindow() is not { } owner) return false;
         var dialog = new ConfirmDialog(title, message);
-        var result = await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        var result = await dialog.ShowDialog(owner);
         return result ?? false;
     }
 
     private async Task ShowErrorDialog(string message)
     {
+        if (GetOwnerWindow() is not { } owner) return;
         var dialog = new MessageDialog("Error", message, true);
-        await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        await dialog.ShowDialog(owner);
     }
 
     private async Task ShowInfoDialog(string title, string message)
     {
+        if (GetOwnerWindow() is not { } owner) return;
         var dialog = new MessageDialog(title, message, false);
-        await dialog.ShowDialog(this.GetVisualRoot() as Window);
+        await dialog.ShowDialog(owner);
     }
+
+    private Window? GetOwnerWindow() => this.GetVisualRoot() as Window;
 
     public void RefreshAll()
     {
@@ -728,7 +740,7 @@ public class InputDialog : Window
         };
     }
 
-    public async Task<string?> ShowDialog(Window parent)
+    public new async Task<string?> ShowDialog(Window parent)
     {
         await base.ShowDialog(parent);
         return string.IsNullOrEmpty(_result) ? null : _result;
@@ -772,7 +784,7 @@ public class ConfirmDialog : Window
         Content = panel;
     }
 
-    public async Task<bool?> ShowDialog(Window parent)
+    public new async Task<bool?> ShowDialog(Window parent)
     {
         await base.ShowDialog(parent);
         return _result;
@@ -815,7 +827,7 @@ public class MessageDialog : Window
         Content = panel;
     }
 
-    public async Task ShowDialog(Window parent)
+    public new async Task ShowDialog(Window parent)
     {
         await base.ShowDialog(parent);
     }
@@ -903,7 +915,7 @@ public class CreateFileDialog : Window
         return Path.GetFileName(directory).Replace(" ", "");
     }
 
-    public async Task<string?> ShowDialog(Window parent)
+    public new async Task<string?> ShowDialog(Window parent)
     {
         await base.ShowDialog(parent);
         return string.IsNullOrEmpty(_result) ? null : _result;

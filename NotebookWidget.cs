@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
+using Avalonia.Platform.Storage;
 using Avalonia.Media;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
@@ -567,6 +568,9 @@ public class NotebookWidget : UserControl
         if (parent != null)
         {
             var newContent = CreateCellTemplate().Build(cell);
+            if (newContent is null)
+                return;
+
             var index = parent.Children.IndexOf(cellBorder);
             if (index >= 0)
             {
@@ -721,22 +725,24 @@ message
             // If no path provided, show save dialog
             if (string.IsNullOrEmpty(filePath))
             {
-                var dialog = new SaveFileDialog
+                var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+                if (storageProvider is null)
+                    return;
+
+                var result = await storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
                 {
                     Title = "Save Notebook",
                     DefaultExtension = "json",
-                    Filters = new List<FileDialogFilter>
+                    FileTypeChoices = new List<FilePickerFileType>
                     {
-                        new() { Name = "Notebook Files", Extensions = { "json" } },
-                        new() { Name = "All Files", Extensions = { "*" } }
+                        new("Notebook Files") { Patterns = new[] { "*.json" } },
+                        new("All Files") { Patterns = new[] { "*" } }
                     }
-                };
-                
-                var result = await dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window());
-                if (string.IsNullOrEmpty(result))
+                });
+                if (result is null)
                     return;
-                
-                filePath = result;
+
+                filePath = result.Path.LocalPath;
             }
 
             // Prepare data for serialization
@@ -779,22 +785,24 @@ message
             // If no path provided, show open dialog
             if (string.IsNullOrEmpty(filePath))
             {
-                var dialog = new OpenFileDialog
+                var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+                if (storageProvider is null)
+                    return false;
+
+                var result = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
                 {
                     Title = "Open Notebook",
                     AllowMultiple = false,
-                    Filters = new List<FileDialogFilter>
+                    FileTypeFilter = new List<FilePickerFileType>
                     {
-                        new() { Name = "Notebook Files", Extensions = { "json" } },
-                        new() { Name = "All Files", Extensions = { "*" } }
+                        new("Notebook Files") { Patterns = new[] { "*.json" } },
+                        new("All Files") { Patterns = new[] { "*" } }
                     }
-                };
-                
-                var result = await dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window());
-                if (result == null || result.Length == 0)
+                });
+                if (result.Count == 0)
                     return false;
-                
-                filePath = result[0];
+
+                filePath = result[0].Path.LocalPath;
             }
 
             // Read and deserialize
@@ -864,22 +872,24 @@ message
         {
             if (string.IsNullOrEmpty(filePath))
             {
-                var dialog = new SaveFileDialog
+                var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+                if (storageProvider is null)
+                    return;
+
+                var result = await storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
                 {
                     Title = "Export Notebook as HTML",
                     DefaultExtension = "html",
-                    Filters = new List<FileDialogFilter>
+                    FileTypeChoices = new List<FilePickerFileType>
                     {
-                        new() { Name = "HTML Files", Extensions = { "html" } },
-                        new() { Name = "All Files", Extensions = { "*" } }
+                        new("HTML Files") { Patterns = new[] { "*.html" } },
+                        new("All Files") { Patterns = new[] { "*" } }
                     }
-                };
-                
-                var result = await dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window());
-                if (string.IsNullOrEmpty(result))
+                });
+                if (result is null)
                     return;
-                
-                filePath = result;
+
+                filePath = result.Path.LocalPath;
             }
 
             var html = GenerateHtml();

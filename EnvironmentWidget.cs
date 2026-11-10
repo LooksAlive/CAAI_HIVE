@@ -13,6 +13,7 @@ using System.Text.Json;
 using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Avalonia.Platform.Storage;
 
 namespace CAAI;
 
@@ -817,7 +818,7 @@ public class EnvironmentWidget : UserControl
                 {
                     Name = reference.Display?.Split(',').First() ?? "Reference",
                     Type = EntityType.File,
-                    Description = reference.Display
+                    Description = reference.Display ?? ""
                 });
             }
 
@@ -861,7 +862,8 @@ public class EnvironmentWidget : UserControl
 
         okBtn.Click += async (_, _) =>
         {
-            await TryAddSymbol(input.Text);
+            if (!string.IsNullOrWhiteSpace(input.Text))
+                await TryAddSymbol(input.Text);
             dialog.Close();
         };
 
@@ -870,24 +872,20 @@ public class EnvironmentWidget : UserControl
         await dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
     }
 
-    private void ShowAddFileDialog()
+    private async void ShowAddFileDialog()
     {
-        var dialog = new OpenFileDialog
+        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (storageProvider is null)
+            return;
+
+        var files = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Select File",
             AllowMultiple = true
-        };
-
-        dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window()).ContinueWith(t =>
-        {
-            if (t.Result != null)
-            {
-                foreach (var file in t.Result)
-                {
-                    Dispatcher.UIThread.Post(() => AddFileEntity(file));
-                }
-            }
         });
+
+        foreach (var file in files)
+            AddFileEntity(file.Path.LocalPath);
     }
 
     private void ShowAddDataDialog()
@@ -938,7 +936,7 @@ public class EnvironmentWidget : UserControl
         {
             if (!string.IsNullOrEmpty(nameInput.Text))
             {
-                AddDataEntity(nameInput.Text, valueInput.Text, typeCombo.SelectedItem?.ToString() ?? "String");
+                AddDataEntity(nameInput.Text, valueInput.Text ?? "", typeCombo.SelectedItem?.ToString() ?? "String");
             }
             dialog.Close();
         };
@@ -1115,34 +1113,34 @@ public class EnvironmentWidget : UserControl
         UpdateStatus($"Exported to: {Path.GetFileName(filePath)}");
     }
 
-    private void ImportEnvironment()
+    private async void ImportEnvironment()
     {
-        var dialog = new OpenFileDialog
+        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (storageProvider is null)
+            return;
+
+        var files = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Import Environment",
-            Filters = new List<FileDialogFilter>
+            AllowMultiple = false,
+            FileTypeFilter = new List<FilePickerFileType>
             {
-                new() { Name = "JSON Files", Extensions = { "json" } }
-            }
-        };
-
-        dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window()).ContinueWith(t =>
-        {
-            if (t.Result?.FirstOrDefault() is string file)
-            {
-                try
-                {
-                    var json = File.ReadAllText(file);
-                    Dispatcher.UIThread.Post(() =>
-                        UpdateStatus($"Imported from: {Path.GetFileName(file)}"));
-                }
-                catch (Exception ex)
-                {
-                    Dispatcher.UIThread.Post(() =>
-                        UpdateStatus($"Import error: {ex.Message}", true));
-                }
+                new("JSON Files") { Patterns = new[] { "*.json" } }
             }
         });
+        if (files.Count == 0)
+            return;
+
+        var file = files[0].Path.LocalPath;
+        try
+        {
+            var json = await File.ReadAllTextAsync(file);
+            UpdateStatus($"Imported from: {Path.GetFileName(file)}");
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus($"Import error: {ex.Message}", true);
+        }
     }
 
     #endregion

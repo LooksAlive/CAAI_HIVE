@@ -156,7 +156,7 @@ public class SymbolSearchWidget : UserControl
     
         InitializeEvents();
         LoadRecentSearches();
-        AnalyzeWorkspace();
+        _ = AnalyzeWorkspace();
     }
     
     private void CloseDialog()

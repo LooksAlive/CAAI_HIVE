@@ -18,6 +18,7 @@ using System.Diagnostics;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using Avalonia.Controls.Notifications;
 using Location = Microsoft.CodeAnalysis.Location;
@@ -769,37 +770,31 @@ public class MainWindow : Window
         _menu.OnNewProject += () => { /* TODO: Implement new project */ };
         _menu.OnOpenFile += async () =>
         {
-            var dialog = new OpenFileDialog
+			var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
             {
                 Title = "Open File",
                 AllowMultiple = true,
-                Filters = new List<FileDialogFilter>
+				FileTypeFilter = new List<FilePickerFileType>
                 {
-                    new() { Name = "C# Files", Extensions = { "cs" } },
-                    new() { Name = "All Files", Extensions = { "*" } }
+					new("C# Files") { Patterns = new[] { "*.cs" } },
+					new("All Files") { Patterns = new[] { "*" } }
                 }
-            };
-            
-            var files = await dialog.ShowAsync(this);
-            if (files != null)
+			});
+			foreach (var file in files)
             {
-                foreach (var file in files)
-                {
-                    OpenFile(file);
-                }
+				OpenFile(file.Path.LocalPath);
             }
         };
         _menu.OnOpenProject += async () =>
         {
-            var dialog = new OpenFolderDialog
+			var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
             {
-                Title = "Open Project Folder"
-            };
-            
-            var folder = await dialog.ShowAsync(this);
-            if (!string.IsNullOrEmpty(folder))
+				Title = "Open Project Folder",
+				AllowMultiple = false
+			});
+			if (folders.Count > 0)
             {
-                await LoadProjectFromFolder(folder);
+				await LoadProjectFromFolder(folders[0].Path.LocalPath);
             }
         };
         _menu.OnOpenRecentRequested += path =>
@@ -853,8 +848,11 @@ public class MainWindow : Window
         };
         _menu.OnSaveAll += () =>
         {
-            foreach (TabItem tab in _tabs.Items)
+			foreach (TabItem? tab in _tabs.Items)
             {
+				if (tab is null)
+					continue;
+
                 var editor = FindEditorInContent(tab.Content);
                 if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
                 {
@@ -1414,7 +1412,8 @@ public class MainWindow : Window
 	{
 		_workspace.RegisterWorkspaceChangedHandler(async (sender) =>
 		{
-			await Task.Delay(1000);
+			if (sender.Kind != WorkspaceChangeKind.DocumentChanged) return;
+			await Task.Delay(500);
 			if (sender.DocumentId == null) return;
 			var diagnostics = await GetDiagnosticsForDocument(sender.DocumentId);
 			var items = diagnostics
@@ -1431,31 +1430,6 @@ public class MainWindow : Window
 				}
 			});
 		});
-
-		_workspace.WorkspaceChanged += async (sender, e) =>
-		{
-			if (e.Kind != WorkspaceChangeKind.DocumentChanged) return;
-			// Debounce: Wait 500ms so we don't re-compile on every single keystroke
-			if (e.DocumentId == null) return;
-
-			await Task.Delay(500);
-			var diagnostics = await GetDiagnosticsForDocument(e.DocumentId);
-
-			var items = diagnostics
-				.Select(Convert)
-				.ToList();
-
-			_diagnosticsPanel.SetDiagnostics(items);
-
-			// If the active tab is this document, update the markers
-			Dispatcher.UIThread.Post(() =>
-			{
-				if (_tabs.SelectedItem is TabItem activeTab && activeTab.Tag is CodeEditor editor)
-				{
-					HighlightDiagnostics(editor, diagnostics);
-				}
-			});
-		};
 	}
 
 	private SyntaxTree? OpenFile(string path)

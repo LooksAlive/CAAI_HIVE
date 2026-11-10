@@ -314,7 +314,7 @@ public static class SymbolTooltip
 
         // Namespace
         if (symbol.ContainingNamespace != null)
-            details.Add(("Namespace", symbol.ContainingNamespace.ToString(), "#569CD6"));
+            details.Add(("Namespace", symbol.ContainingNamespace.ToString() ?? "", "#569CD6"));
 
         // Assembly
         if (!string.IsNullOrEmpty(symbol.ContainingAssembly?.Name))
@@ -324,7 +324,7 @@ public static class SymbolTooltip
         if (symbol is IMethodSymbol method)
         {
             // Add return type explicitly
-            details.Add(("Returns", GetTypeName(method.ReturnType), "#4EC9B0"));
+            details.Add(("Returns", GetTypeName(method.ReturnType) ?? "", "#4EC9B0"));
             
             if (method.TypeParameters.Length > 0)
             {
