@@ -1130,15 +1130,21 @@ public class MainWindow : Window
 		}
 	}
 
-	private void OpenFileAtLine(string? filePath, int line)
+	private void OpenFileAtLine(string? filePath, int line, int? column = null)
 	{
 		if (string.IsNullOrEmpty(filePath)) return;
 
-		// Open the file in editor and go to line
-		var editor = OpenFile(filePath);
-		if (_tabs.SelectedItem is CodeEditor ed)
+		OpenFile(filePath);
+		if (_tabs.SelectedItem is TabItem tab && FindEditorInContent(tab.Content) is CodeEditor editor)
 		{
-			ed.GoToLine(line + 1);
+			var lineNumber = Math.Clamp(line + 1, 1, editor._editor.Document.LineCount);
+			editor.GoToLine(lineNumber);
+			if (column.HasValue)
+			{
+				var lineSegment = editor._editor.Document.GetLineByNumber(lineNumber);
+				editor._editor.CaretOffset = lineSegment.Offset + Math.Clamp(column.Value, 0, lineSegment.Length);
+			}
+			editor.FocusEditor();
 		}
 	}
 
@@ -1225,8 +1231,7 @@ public class MainWindow : Window
 
 		_diagnosticsPanel.OnDiagnosticClicked += (diag) =>
 		{
-			OpenFile(diag.FilePath);
-			//GoToLine(diag.Line, diag.Column);
+			OpenFileAtLine(diag.FilePath, diag.Line - 1, diag.Column - 1);
 		};
 	}
 
@@ -1236,7 +1241,8 @@ public class MainWindow : Window
 		if (content is CodeEditor editor) return editor;
 
 		// Case B: The content is a container (like a UserControl or Panel)
-		if (content is ContentControl cc && cc.Content is CodeEditor e) return e;
+		if (content is Control control)
+			return control.GetVisualDescendants().OfType<CodeEditor>().FirstOrDefault();
 
 		// Case C: If you use a custom NotebookWidget, you'd check for that here
 		return null;
@@ -1390,10 +1396,11 @@ public class MainWindow : Window
 
 		return new DiagnosticItem
 		{
+			Code = d.Id,
 			Message = d.GetMessage(),
-			FilePath = span.Path ?? "",
-			Line = span.StartLinePosition.Line + 1,
-			Column = span.StartLinePosition.Character + 1,
+			FilePath = d.Location.IsInSource ? span.Path ?? "" : "",
+			Line = d.Location.IsInSource ? span.StartLinePosition.Line + 1 : 0,
+			Column = d.Location.IsInSource ? span.StartLinePosition.Character + 1 : 0,
 			Severity = d.Severity switch
 			{
 				DiagnosticSeverity.Error => DiagnosticSeverityType.Error,
@@ -1460,7 +1467,9 @@ public class MainWindow : Window
 		{
 			foreach (TabItem? t in _tabs.Items)
 			{
-				if (t?.Header?.ToString() == path)
+				if (t is not null &&
+					FindEditorInContent(t.Content) is CodeEditor existingEditor &&
+					string.Equals(Path.GetFullPath(existingEditor.FilePath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
 				{
 					_tabs.SelectedItem = t;
 					return null;
