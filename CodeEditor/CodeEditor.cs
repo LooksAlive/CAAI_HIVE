@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Highlighting;
@@ -230,6 +231,7 @@ public class CodeEditor : UserControl
 
         // Ctrl+S save
         _editor.KeyDown += Editor_KeyDown;
+        _editor.AddHandler(InputElement.KeyDownEvent, Editor_PreviewKeyDown, RoutingStrategies.Tunnel);
 
         // Ctrl+Click for Go to Definition
         _editor.TextArea.TextView.PointerPressed += Editor_PointerPressed;
@@ -712,6 +714,23 @@ public class CodeEditor : UserControl
     {
         if (string.IsNullOrEmpty(e.Text)) return;
 
+        var trigger = e.Text == "."
+            ? CompletionTrigger.CreateInsertionTrigger('.')
+            : CompletionTrigger.Invoke;
+        await ShowCompletionsAsync(e.Text, trigger);
+    }
+
+    private void Editor_PreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Space || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            return;
+
+        e.Handled = true;
+        _ = ShowCompletionsAsync(null, CompletionTrigger.Invoke);
+    }
+
+    private async Task ShowCompletionsAsync(string? inputText, CompletionTrigger trigger)
+    {
         try
         {
             // Sync the workspace immediately
@@ -725,10 +744,6 @@ public class CodeEditor : UserControl
             var completionService = CompletionService.GetService(document);
             if (completionService == null) return;
 
-            CompletionTrigger trigger = e.Text == "."
-                ? CompletionTrigger.CreateInsertionTrigger('.')
-                : CompletionTrigger.Invoke;
-
             var results = await completionService.GetCompletionsAsync(document, caretOffset, trigger);
             if (results.ItemsList.Count == 0) return;
 
@@ -737,7 +752,7 @@ public class CodeEditor : UserControl
 
             var items = results.ItemsList;
             
-            if (e.Text != ".")
+            if (inputText != ".")
             {
                 items = items.Where(i => i.FilterText.StartsWith(filterText, StringComparison.OrdinalIgnoreCase))
                              .ToImmutableArray();
@@ -758,7 +773,7 @@ public class CodeEditor : UserControl
             foreach (var item in items.OrderByDescending(i => i.Rules.SelectionBehavior == CompletionItemSelectionBehavior.HardSelection)
                                       .ThenBy(i => i.SortText))
             {
-                if (e.Text == "." && item.Tags.Contains("Keyword")) continue;
+                if (inputText == "." && item.Tags.Contains("Keyword")) continue;
                 // When creating completion items
                 data.Add(new MyCompletionData(
                     item.DisplayText, 
@@ -770,6 +785,7 @@ public class CodeEditor : UserControl
 
             if (data.Count > 0)
             {
+                _completionWindow.StartOffset = results.Span.Start;
                 _completionWindow.Show();
                 _completionWindow.Closed += (_, _) => _completionWindow = null;
             }

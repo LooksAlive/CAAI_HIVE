@@ -24,12 +24,17 @@ public static class SymbolTooltip
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(6),
             Padding = new Thickness(0),
-            MaxWidth = 500,
-            MaxHeight = 400,
+            MaxWidth = 460,
+            MaxHeight = 370,
         };
 
-        var content = CreateTooltipContent(symbol);
-        tooltip.Content = content;
+        tooltip.Content = new ScrollViewer
+        {
+            Content = CreateTooltipContent(symbol),
+            MaxHeight = 360,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+        };
         
         return tooltip;
     }
@@ -76,7 +81,7 @@ public static class SymbolTooltip
         var header = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(44, 44, 46)),
-            Padding = new Thickness(12, 10),
+            Padding = new Thickness(8, 6),
             CornerRadius = new CornerRadius(6, 6, 0, 0)
         };
 
@@ -86,12 +91,12 @@ public static class SymbolTooltip
         };
 
         // Icon and type badge
-        var leftStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        var leftStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         
         var icon = new TextBlock
         {
             Text = GetModernIcon(symbol),
-            FontSize = 18,
+            FontSize = 15,
             VerticalAlignment = VerticalAlignment.Center
         };
         
@@ -99,13 +104,13 @@ public static class SymbolTooltip
         {
             Background = GetKindColor(symbol),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(8, 4),
+            Padding = new Thickness(6, 3),
             VerticalAlignment = VerticalAlignment.Center
         };
         typeBadge.Child = new TextBlock
         {
             Text = symbol.Kind.ToString().ToUpperInvariant(),
-            FontSize = 10,
+            FontSize = 9,
             FontWeight = FontWeight.Bold,
             Foreground = Brushes.White
         };
@@ -117,11 +122,11 @@ public static class SymbolTooltip
         var name = new TextBlock
         {
             Text = symbol.Name,
-            FontSize = 14,
+            FontSize = 12,
             FontWeight = FontWeight.Bold,
             Foreground = Brushes.White,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(10, 0, 0, 0)
+            Margin = new Thickness(7, 0, 0, 0)
         };
 
         // Copy button
@@ -174,7 +179,7 @@ public static class SymbolTooltip
         var border = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 31)),
-            Padding = new Thickness(12, 8),
+            Padding = new Thickness(8, 6),
             Margin = new Thickness(0, 0, 0, 0)
         };
 
@@ -182,7 +187,7 @@ public static class SymbolTooltip
         {
             Text = description,
             FontFamily = new FontFamily("Consolas, monospace"),
-            FontSize = 11,
+            FontSize = 10,
             Foreground = new SolidColorBrush(Color.FromRgb(204, 204, 204)),
             TextWrapping = TextWrapping.Wrap
         };
@@ -205,11 +210,11 @@ public static class SymbolTooltip
         var border = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 31)),
-            Padding = new Thickness(12, 10),
+            Padding = new Thickness(8, 6),
             Margin = new Thickness(0)
         };
 
-        var stack = new StackPanel { Spacing = 8 };
+        var stack = new StackPanel { Spacing = 4 };
 
         // Header with parameter count
         var headerStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
@@ -217,14 +222,14 @@ public static class SymbolTooltip
         var paramIcon = new TextBlock
         {
             Text = "📌",
-            FontSize = 12,
+            FontSize = 10,
             VerticalAlignment = VerticalAlignment.Center
         };
         
         var paramHeader = new TextBlock
         {
             Text = $"Parameters ({method.Parameters.Length})",
-            FontSize = 11,
+            FontSize = 10,
             FontWeight = FontWeight.Bold,
             Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128))
         };
@@ -240,8 +245,8 @@ public static class SymbolTooltip
             {
                 Background = new SolidColorBrush(Color.FromArgb(40, 50, 50, 55)),
                 CornerRadius = new CornerRadius(4),
-                Padding = new Thickness(10, 6),
-                Margin = new Thickness(0, 2)
+                Padding = new Thickness(6, 3),
+                Margin = new Thickness(0, 1)
             };
 
             var paramGrid = new Grid
@@ -255,9 +260,9 @@ public static class SymbolTooltip
                 Text = GetTypeName(param.Type),
                 Foreground = new SolidColorBrush(Color.FromRgb(156, 220, 254)),
                 FontFamily = new FontFamily("Consolas, monospace"),
-                FontSize = 11,
+                FontSize = 10,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 10, 0)
+                Margin = new Thickness(0, 0, 8, 0)
             };
 
             // Parameter name
@@ -266,7 +271,7 @@ public static class SymbolTooltip
                 Text = param.Name,
                 Foreground = new SolidColorBrush(Color.FromRgb(204, 204, 204)),
                 FontFamily = new FontFamily("Consolas, monospace"),
-                FontSize = 11,
+                FontSize = 10,
                 VerticalAlignment = VerticalAlignment.Center
             };
 
@@ -278,10 +283,10 @@ public static class SymbolTooltip
                 {
                     Text = $" = {defaultValue}",
                     Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
-                    FontSize = 10,
+                    FontSize = 9,
                     FontStyle = FontStyle.Italic,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Margin = new Thickness(10, 0, 0, 0)
+                    Margin = new Thickness(6, 0, 0, 0)
                 };
                 paramGrid.Children.Add(defaultText);
                 Grid.SetColumn(defaultText, 2);
@@ -355,7 +360,7 @@ public static class SymbolTooltip
         var border = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 31)),
-            Padding = new Thickness(12, 10),
+            Padding = new Thickness(8, 6),
             Margin = new Thickness(0)
         };
 
@@ -375,8 +380,8 @@ public static class SymbolTooltip
             {
                 Text = label + ":",
                 Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
-                FontSize = 11,
-                Margin = new Thickness(0, i > 0 ? 6 : 0, 16, 0),
+                FontSize = 10,
+                Margin = new Thickness(0, i > 0 ? 3 : 0, 12, 0),
                 VerticalAlignment = VerticalAlignment.Top
             };
             
@@ -384,9 +389,9 @@ public static class SymbolTooltip
             {
                 Text = value,
                 Foreground = !string.IsNullOrEmpty(color) ? new SolidColorBrush(Color.Parse(color)) : new SolidColorBrush(Color.FromRgb(204, 204, 204)),
-                FontSize = 11,
+                FontSize = 10,
                 FontFamily = new FontFamily("Consolas, monospace"),
-                Margin = new Thickness(0, i > 0 ? 6 : 0, 0, 0),
+                Margin = new Thickness(0, i > 0 ? 3 : 0, 0, 0),
                 TextWrapping = TextWrapping.Wrap
             };
 
@@ -421,26 +426,26 @@ public static class SymbolTooltip
         var border = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)),
-            Padding = new Thickness(12, 10),
+            Padding = new Thickness(8, 6),
             CornerRadius = new CornerRadius(0, 0, 6, 6)
         };
 
-        var stack = new StackPanel { Spacing = 6 };
+        var stack = new StackPanel { Spacing = 3 };
         
         var header = new TextBlock
         {
             Text = "📝 Documentation",
-            FontSize = 10,
+            FontSize = 9,
             FontWeight = FontWeight.Bold,
             Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
-            Margin = new Thickness(0, 0, 0, 4)
+            Margin = new Thickness(0, 0, 0, 1)
         };
         stack.Children.Add(header);
 
         var summaryText = new TextBlock
         {
             Text = summary,
-            FontSize = 11,
+            FontSize = 10,
             Foreground = new SolidColorBrush(Color.FromRgb(187, 187, 187)),
             TextWrapping = TextWrapping.Wrap
         };
