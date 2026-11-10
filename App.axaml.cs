@@ -2,6 +2,7 @@ using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -529,6 +530,22 @@ public class MainWindow : Window
 	}
 
 	// Add a method to create a better layout with splitter between editors and output
+	private static void ConfigureTabStrip(TabControl tabControl)
+	{
+		tabControl.ItemsPanel = new FuncTemplate<Panel>(() => new StackPanel
+		{
+			Orientation = Orientation.Horizontal
+		});
+		tabControl.Styles.Add(new Style(selector => selector.OfType<TabItem>())
+		{
+			Setters =
+			{
+				new Setter(TemplatedControl.PaddingProperty, new Thickness(8, 3)),
+				new Setter(TemplatedControl.FontSizeProperty, 12.0)
+			}
+		});
+	}
+
 	private Grid CreateMainLayoutWithOutputSplitter()
 	{
 		var mainGrid = new Grid
@@ -636,6 +653,7 @@ public class MainWindow : Window
 			Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
 			TabStripPlacement = Dock.Top
 		};
+		ConfigureTabStrip(_outputTabs);
 
 		_nuGetPackageManager = new NuGetPackageManager(_notificationManager, _baseDir);
         _terminal = new TerminalWidget(_baseDir);
@@ -680,6 +698,7 @@ public class MainWindow : Window
 		Title = "CAAI IDE";
 		Width = 1200;
 		Height = 800;
+		ConfigureTabStrip(_tabs);
 
 		InitializeRoslyn();
 		SetupLiveDiagnostics();

@@ -58,8 +58,8 @@ public class DiagnosticsPanel : UserControl
             var row = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("Auto, Auto, *, Auto"),
-                MinHeight = 32,
-                Margin = new Thickness(4, 1)
+                MinHeight = 28,
+                Margin = new Thickness(2, 0)
             };
 
             var severity = new TextBlock
@@ -89,7 +89,7 @@ public class DiagnosticsPanel : UserControl
                 Foreground = Brushes.White,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 5)
+                Margin = new Thickness(0, 3)
             };
             Grid.SetColumn(message, 2);
 
@@ -107,7 +107,7 @@ public class DiagnosticsPanel : UserControl
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
-                Padding = new Thickness(4, 2),
+                Padding = new Thickness(3, 1),
                 Cursor = new Cursor(StandardCursorType.Hand),
                 IsEnabled = !string.IsNullOrWhiteSpace(x.FilePath) && x.Line > 0,
                 VerticalAlignment = VerticalAlignment.Center
@@ -133,12 +133,12 @@ public class DiagnosticsPanel : UserControl
         var header = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*, Auto"),
-            Margin = new Thickness(8, 6, 8, 8)
+            Margin = new Thickness(8, 4, 8, 5)
         };
         header.Children.Add(new TextBlock
         {
             Text = "Problems",
-            FontSize = 13,
+            FontSize = 12,
             FontWeight = FontWeight.SemiBold,
             Foreground = Brushes.White,
             VerticalAlignment = VerticalAlignment.Center

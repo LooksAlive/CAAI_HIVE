@@ -146,7 +146,7 @@ public class NuGetPackageManager : UserControl
         _projectBox = new ComboBox
         {
             ItemsSource = _projectFiles,
-            MinWidth = 250,
+            MinWidth = 210,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
         _projectBox.SelectionChanged += async (_, _) =>
@@ -158,8 +158,8 @@ public class NuGetPackageManager : UserControl
         var panel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Margin = new Thickness(0, 0, 0, 8)
+            Spacing = 6,
+            Margin = new Thickness(0, 0, 0, 6)
         };
         panel.Children.Add(new TextBlock
         {
@@ -176,7 +176,7 @@ public class NuGetPackageManager : UserControl
         var panel = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto"),
-            Margin = new Thickness(0, 0, 0, 10)
+            Margin = new Thickness(0, 0, 0, 6)
         };
 
         _searchBox = new TextBox
@@ -197,7 +197,7 @@ public class NuGetPackageManager : UserControl
             Content = "🔍 Search",
             Background = new SolidColorBrush(Color.FromRgb(0, 100, 150)),
             Foreground = Brushes.White,
-            Padding = new Thickness(15, 8),
+            Padding = new Thickness(11, 5),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         _searchButton.Click += (_, _) => SearchPackages();
@@ -208,7 +208,7 @@ public class NuGetPackageManager : UserControl
             Content = "🔄 Refresh Installed",
             Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Foreground = Brushes.White,
-            Padding = new Thickness(10, 8),
+            Padding = new Thickness(9, 5),
             Cursor = new Cursor(StandardCursorType.Hand),
             Margin = new Thickness(6, 0, 0, 0)
         };
@@ -228,7 +228,7 @@ public class NuGetPackageManager : UserControl
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
-            Margin = new Thickness(0, 0, 0, 10)
+            Margin = new Thickness(0, 0, 0, 6)
         };
 
         panel.Children.Add(new TextBlock
@@ -241,7 +241,7 @@ public class NuGetPackageManager : UserControl
         _versionBox = new TextBox
         {
             Watermark = "Latest",
-            Width = 125,
+            Width = 110,
             Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
             Foreground = Brushes.White
         };
@@ -251,7 +251,7 @@ public class NuGetPackageManager : UserControl
             Content = "Install",
             Background = new SolidColorBrush(Color.FromRgb(28, 112, 93)),
             Foreground = Brushes.White,
-            Padding = new Thickness(14, 6),
+            Padding = new Thickness(11, 4),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         _installButton.Click += InstallSelectedPackage;
@@ -261,7 +261,7 @@ public class NuGetPackageManager : UserControl
             Content = "Uninstall",
             Background = new SolidColorBrush(Color.FromRgb(126, 57, 57)),
             Foreground = Brushes.White,
-            Padding = new Thickness(14, 6),
+            Padding = new Thickness(11, 4),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         _uninstallButton.Click += UninstallSelectedPackage;
