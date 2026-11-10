@@ -182,6 +182,8 @@ public class MainWindow : Window
 	private readonly RunDebugToolbar _toolbar = new();
 	private readonly DiagnosticsPanel _diagnosticsPanel = new();
     private NuGetPackageManager _nuGetPackageManager = null!;
+	private TabControl _outputTabs = null!;
+	private TabItem _nuGetTab = null!;
     private TerminalWidget _terminal = null!;
 	private readonly MainMenuWidget _menu = new();
     private readonly TreeView _hierarchyTree;
@@ -257,6 +259,8 @@ public class MainWindow : Window
 				// _pathMap[filePath] = docId;
 			}
 		}
+
+        _nuGetPackageManager.SetProjectFolder(folderPath);
 	}
 
 	private void InitializeRoslyn()
@@ -626,18 +630,20 @@ public class MainWindow : Window
 		};
 
 		// Output area with tabs
-		var outputTabs = new TabControl
+		_outputTabs = new TabControl
 		{
 			Background = new SolidColorBrush(Color.FromRgb(35, 35, 35)),
 			TabStripPlacement = Dock.Top
 		};
 
-        _nuGetPackageManager = new NuGetPackageManager(_notificationManager, _workspace);
+		_nuGetPackageManager = new NuGetPackageManager(_notificationManager, _baseDir);
         _terminal = new TerminalWidget(_baseDir);
+		_nuGetPackageManager.OutputAppended += (_, message) => _terminal.AppendOutput(message + Environment.NewLine);
 
-		outputTabs.Items.Add(new TabItem { Header = "⚠️ Diagnostics", Content = _diagnosticsPanel });
-        outputTabs.Items.Add(new TabItem { Header = "👨‍💻 Terminal", Content = _terminal });
-        outputTabs.Items.Add(new TabItem { Header = "📦 NuGet", Content = _nuGetPackageManager });
+		_outputTabs.Items.Add(new TabItem { Header = "⚠️ Diagnostics", Content = _diagnosticsPanel });
+		_outputTabs.Items.Add(new TabItem { Header = "👨‍💻 Terminal", Content = _terminal });
+		_nuGetTab = new TabItem { Header = "📦 NuGet", Content = _nuGetPackageManager };
+		_outputTabs.Items.Add(_nuGetTab);
         
 		
         // Position everything in the grid
@@ -654,15 +660,15 @@ public class MainWindow : Window
 		Grid.SetRow(bottomSplitter, 1);
 		Grid.SetColumnSpan(bottomSplitter, 3);
 
-		Grid.SetColumn(outputTabs, 0);
-		Grid.SetRow(outputTabs, 2);
-		Grid.SetColumnSpan(outputTabs, 3);
+		Grid.SetColumn(_outputTabs, 0);
+		Grid.SetRow(_outputTabs, 2);
+		Grid.SetColumnSpan(_outputTabs, 3);
 
 		mainGrid.Children.Add(_sideTabs);
 		mainGrid.Children.Add(leftSplitter);
 		mainGrid.Children.Add(_tabs);
 		mainGrid.Children.Add(bottomSplitter);
-		mainGrid.Children.Add(outputTabs);
+		mainGrid.Children.Add(_outputTabs);
 
 		return mainGrid;
 	}
@@ -998,6 +1004,7 @@ public class MainWindow : Window
         };
 
         // === Tools/Help Menu ===
+		_menu.OnOpenNuGetManager += () => _outputTabs.SelectedItem = _nuGetTab;
         _menu.OnOpenSettings += async () => await ShowSettings();
         
         _menu.OnOpenAbout += () =>

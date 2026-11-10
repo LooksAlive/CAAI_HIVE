@@ -35,6 +35,7 @@ public partial class MainMenuWidget : UserControl
     public event Action? OnToggleBreakpoint;
 
     public event Action? OnOpenSettings;
+    public event Action? OnOpenNuGetManager;
     public event Action? OnOpenAbout;
 
     public MainMenuWidget()
@@ -77,6 +78,7 @@ public partial class MainMenuWidget : UserControl
         MenuToggleBreakpoint.Click += (s, e) => OnToggleBreakpoint?.Invoke();
 
         // === Tools / Help Subscriptions ===
+        MenuNuget.Click += (s, e) => OnOpenNuGetManager?.Invoke();
         MenuSettings.Click += (s, e) => OnOpenSettings?.Invoke();
         MenuAbout.Click    += (s, e) => OnOpenAbout?.Invoke();
     }
