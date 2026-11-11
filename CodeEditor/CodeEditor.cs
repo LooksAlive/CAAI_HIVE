@@ -47,6 +47,7 @@ public class CodeEditor : UserControl
     private FoldingManager? _foldingManager;
     private ToolTip _toolTip;
     private CancellationTokenSource? _toolTipCts;
+    private int? _hoverOffset;
     private readonly Brush _currentLineBackground = new SolidColorBrush(Color.FromArgb(40, 100, 100, 100));
     private readonly Brush _selectionBrush = new SolidColorBrush(Color.FromArgb(80, 0, 120, 215));
     private readonly Brush _lineNumberForeground = new SolidColorBrush(Color.FromRgb(128, 128, 128));
@@ -238,6 +239,7 @@ public class CodeEditor : UserControl
 
     public void SetDiagnostics(IEnumerable<Diagnostic> diagnostics)
     {
+        HideTooltip();
         _diagnosticRenderer.Diagnostics = diagnostics
             .Where(diagnostic => diagnostic.Location.IsInSource &&
                 diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
@@ -316,7 +318,8 @@ public class CodeEditor : UserControl
         _editor.AddHandler(InputElement.PointerPressedEvent, Editor_PointerPressed, RoutingStrategies.Tunnel);
 
         // Tooltip with delay and proper positioning
-        _editor.TextArea.TextView.PointerMoved += TextView_PointerMoved;
+        _editor.TextArea.TextView.AddHandler(InputElement.PointerMovedEvent,
+            TextView_PointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
         _editor.TextArea.TextView.PointerExited += (_, _) => HideTooltip();
 
         // Hide tooltip when scrolling
@@ -690,86 +693,34 @@ public class CodeEditor : UserControl
 
     private async void TextView_PointerMoved(object? sender, PointerEventArgs e)
     {
-        // Cancel previous tooltip request
-        _toolTipCts?.Cancel();
+        var textView = _editor.TextArea.TextView;
+        if (!textView.VisualLinesValid) return;
+        var position = e.GetPosition(textView);
+        if (!new Rect(textView.Bounds.Size).Contains(position))
+        {
+            HideTooltip();
+            return;
+        }
+        var textPosition = textView.GetPositionFloor(position + textView.ScrollOffset);
+        if (!textPosition.HasValue)
+        {
+            HideTooltip();
+            return;
+        }
+        var line = _editor.Document.GetLineByNumber(textPosition.Value.Line);
+        var offset = line.Offset + Math.Clamp(textPosition.Value.Column - 1, 0, line.Length);
+        if (_hoverOffset == offset) return;
+        HideTooltip();
+        _toolTipCts?.Dispose();
         _toolTipCts = new CancellationTokenSource();
         var token = _toolTipCts.Token;
-
-        var textView = _editor.TextArea.TextView;
-        
-        // Get the position relative to the text view
-        var position = e.GetPosition(textView);
-        
-        // Also get the scroll offset to adjust position
-        var scrollOffset = textView.ScrollOffset;
+        _hoverOffset = offset;
 
         try
         {
             await Task.Delay(500, token);
-
-            await Dispatcher.UIThread.InvokeAsync(async () =>
-            {
-                if (token.IsCancellationRequested) return;
-
-                // Convert the mouse position to document coordinates accounting for scroll
-                var visualPosition = new Point(position.X + scrollOffset.X, position.Y + scrollOffset.Y);
-                
-                // Get the position in the text view
-                var tvp = textView.GetPosition(visualPosition);
-                if (!tvp.HasValue)
-                {
-                    HideTooltip();
-                    return;
-                }
-
-                int documentOffset = _editor.Document.GetOffset(tvp.Value.Line, tvp.Value.Column);
-                var document = _workspace.CurrentSolution.GetDocument(_documentId);
-                if (document == null) return;
-
-                var model = await document.GetSemanticModelAsync();
-                var root = await document.GetSyntaxRootAsync();
-
-                if (root == null || model == null || documentOffset < 0 || documentOffset >= root.FullSpan.Length)
-                {
-                    HideTooltip();
-                    return;
-                }
-
-                try
-                {
-                    var token2 = root.FindToken(documentOffset);
-                    if (token2.Parent == null)
-                    {
-                        HideTooltip();
-                        return;
-                    }
-
-                    var symbolInfo = model.GetSymbolInfo(token2.Parent);
-                    var symbol = symbolInfo.Symbol ?? model.GetDeclaredSymbol(token2.Parent);
-
-                    if (symbol == null && token2.Parent.Parent != null)
-                    {
-                        symbol = model.GetSymbolInfo(token2.Parent.Parent).Symbol;
-                    }
-
-                    if (symbol != null)
-                    {
-                        // Use the extracted SymbolTooltip class
-                        _toolTip = SymbolTooltip.CreateRichTooltip(symbol);
-                        ToolTip.SetTip(_editor, _toolTip);
-                        ToolTip.SetPlacement(_editor, PlacementMode.Pointer);
-                        ToolTip.SetIsOpen(_editor, true);
-                    }
-                    else
-                    {
-                        HideTooltip();
-                    }
-                }
-                catch (Exception)
-                {
-                    HideTooltip();
-                }
-            });
+            token.ThrowIfCancellationRequested();
+            await ShowTooltipAtOffsetAsync(offset, token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -778,9 +729,76 @@ public class CodeEditor : UserControl
         }
     }
 
+    private ToolTip? CreateDiagnosticTooltip(int offset)
+    {
+        var matches = _diagnosticRenderer.Diagnostics.Where(diagnostic =>
+        {
+            var span = diagnostic.Location.SourceSpan;
+            if (span.Length > 0) return span.Contains(offset);
+            var start = Math.Min(span.Start, Math.Max(0, _editor.Document.TextLength - 1));
+            return offset == start;
+        }).OrderByDescending(diagnostic => diagnostic.Severity).ToList();
+        if (matches.Count == 0) return null;
+
+        var content = new StackPanel { Spacing = 8, MaxWidth = 480 };
+        foreach (var diagnostic in matches)
+        {
+            var entry = new StackPanel { Spacing = 3 };
+            entry.Children.Add(new TextBlock
+            {
+                Text = $"{diagnostic.Severity} {diagnostic.Id}",
+                Foreground = diagnostic.Severity == DiagnosticSeverity.Error ? Brushes.LightCoral : Brushes.Orange,
+                FontWeight = FontWeight.SemiBold
+            });
+            entry.Children.Add(new TextBlock { Text = diagnostic.GetMessage(), TextWrapping = TextWrapping.Wrap });
+            content.Children.Add(entry);
+        }
+
+        return new ToolTip
+        {
+            Content = content,
+            Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
+            Foreground = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 8),
+            FontSize = 12
+        };
+    }
+
+    private async Task ShowTooltipAtOffsetAsync(int offset, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var tooltip = CreateDiagnosticTooltip(offset);
+        if (tooltip == null)
+        {
+            var document = _workspace.CurrentSolution.GetDocument(_documentId);
+            if (document == null) return;
+            var model = await document.GetSemanticModelAsync(cancellationToken);
+            var root = await document.GetSyntaxRootAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (root == null || model == null || offset < 0 || offset >= root.FullSpan.Length) return;
+            var syntaxToken = root.FindToken(offset);
+            if (syntaxToken.Parent == null) return;
+            var symbol = model.GetSymbolInfo(syntaxToken.Parent, cancellationToken).Symbol ??
+                model.GetDeclaredSymbol(syntaxToken.Parent, cancellationToken);
+            if (symbol == null && syntaxToken.Parent.Parent != null)
+                symbol = model.GetSymbolInfo(syntaxToken.Parent.Parent, cancellationToken).Symbol;
+            if (symbol == null) return;
+            tooltip = SymbolTooltip.CreateRichTooltip(symbol);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        _toolTip = tooltip;
+        ToolTip.SetTip(_editor, _toolTip);
+        ToolTip.SetPlacement(_editor, PlacementMode.Pointer);
+        ToolTip.SetIsOpen(_editor, true);
+    }
+
     private void HideTooltip()
     {
         _toolTipCts?.Cancel();
+        _hoverOffset = null;
         ToolTip.SetIsOpen(_editor, false);
     }
 

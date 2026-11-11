@@ -204,6 +204,11 @@ public class MainWindow : Window
     private GridLength _outputHeight = new(250);
     private readonly Dictionary<DocumentId, List<Diagnostic>> _documentDiagnostics = new();
     private readonly Dictionary<DocumentId, CancellationTokenSource> _diagnosticRequests = new();
+    private readonly TextBlock _statusFile = new() { TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock _statusDiagnostics = new() { Width = 160, TextAlignment = TextAlignment.Right };
+    private readonly TextBlock _statusPosition = new() { Width = 220, TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock _statusMode = new() { Width = 140, TextAlignment = TextAlignment.Right };
+    private TextEditor? _statusEditor;
     private TabItem _nuGetTab = null!;
     private TerminalWidget _terminal = null!;
     private readonly MainMenuWidget _menu = new();
@@ -752,6 +757,117 @@ public class MainWindow : Window
         var root = new HotReloadRoot(BuildUI);
         Content = root;
         HotReloadService.Register(root);
+        _tabs.SelectionChanged += OnEditorTabSelectionChanged;
+        _tabs.GotFocus += OnEditorGotFocus;
+        SettingsData.Instance.SettingsChanged += OnStatusSettingsChanged;
+        Closed += (_, _) =>
+        {
+            SetStatusEditor(null);
+            SettingsData.Instance.SettingsChanged -= OnStatusSettingsChanged;
+        };
+        UpdateActiveStatusEditor();
+    }
+
+    private Control CreateStatusBar()
+    {
+        var content = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto, Auto"),
+            Margin = new Thickness(10, 0),
+            ColumnSpacing = 12
+        };
+        var fields = new[] { _statusFile, _statusDiagnostics, _statusPosition, _statusMode };
+        for (var index = 0; index < fields.Length; index++)
+        {
+            var field = fields[index];
+            field.FontSize = 11;
+            field.Foreground = Brushes.LightGray;
+            field.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(field, index);
+            content.Children.Add(field);
+        }
+        var bar = new Border
+        {
+            Height = 28,
+            Background = new SolidColorBrush(Color.FromRgb(38, 38, 42)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Child = content
+        };
+        bar.SizeChanged += (_, _) =>
+        {
+            _statusMode.IsVisible = bar.Bounds.Width >= 760;
+            _statusDiagnostics.IsVisible = bar.Bounds.Width >= 560;
+        };
+        UpdateStatusBar();
+        return bar;
+    }
+
+    private void OnEditorTabSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (ReferenceEquals(e.Source, _tabs)) UpdateActiveStatusEditor();
+    }
+
+    private void OnEditorGotFocus(object? sender, RoutedEventArgs e)
+    {
+        var control = e.Source as Control;
+        var editor = control as TextEditor ?? control?.GetVisualAncestors().OfType<TextEditor>().FirstOrDefault();
+        if (editor != null) SetStatusEditor(editor);
+    }
+
+    private void UpdateActiveStatusEditor()
+    {
+        var tab = _tabs.SelectedItem as TabItem;
+        SetStatusEditor(tab?.Content as TextEditor ?? FindEditorInContent(tab?.Content)?._editor);
+    }
+
+    private void SetStatusEditor(TextEditor? editor)
+    {
+        if (_statusEditor != null)
+        {
+            _statusEditor.TextArea.Caret.PositionChanged -= OnStatusEditorChanged;
+            _statusEditor.TextArea.SelectionChanged -= OnStatusEditorChanged;
+            _statusEditor.TextChanged -= OnStatusEditorChanged;
+        }
+        _statusEditor = editor;
+        if (_statusEditor != null)
+        {
+            _statusEditor.TextArea.Caret.PositionChanged += OnStatusEditorChanged;
+            _statusEditor.TextArea.SelectionChanged += OnStatusEditorChanged;
+            _statusEditor.TextChanged += OnStatusEditorChanged;
+        }
+        UpdateStatusBar();
+    }
+
+    private void OnStatusEditorChanged(object? sender, EventArgs e) => UpdateStatusBar();
+
+    private void OnStatusSettingsChanged(object? sender, EventArgs e) =>
+        Dispatcher.UIThread.Post(UpdateStatusBar);
+
+    private void UpdateStatusBar()
+    {
+        var diagnostics = _documentDiagnostics.Values.SelectMany(items => items).ToList();
+        _statusDiagnostics.Text = $"{diagnostics.Count(item => item.Severity == DiagnosticSeverity.Error)} errors  {diagnostics.Count(item => item.Severity == DiagnosticSeverity.Warning)} warnings";
+        if (_statusEditor == null)
+        {
+            _statusFile.Text = "Ready";
+            ToolTip.SetTip(_statusFile, null);
+            _statusPosition.Text = "";
+            _statusMode.Text = "";
+            return;
+        }
+
+        var owner = _statusEditor.GetVisualAncestors().OfType<CodeEditor>().FirstOrDefault();
+        var tab = _tabs.SelectedItem as TabItem;
+        var codeEditor = owner ?? FindEditorInContent(tab?.Content);
+        _statusFile.Text = codeEditor == null ? tab?.Header?.ToString() ?? "Editor" : Path.GetFileName(codeEditor.FilePath);
+        ToolTip.SetTip(_statusFile, codeEditor?.FilePath);
+        var caret = _statusEditor.TextArea.Caret;
+        _statusPosition.Text = $"Ln {caret.Line}, Col {caret.Column}";
+        if (_statusEditor.SelectionLength > 0)
+            _statusPosition.Text += $" ({_statusEditor.SelectionLength} selected)";
+        var indentation = _statusEditor.Options.ConvertTabsToSpaces ? "Spaces" : "Tab Size";
+        _statusMode.Text = _statusEditor.IsReadOnly ? "Read-only" : $"{indentation}: {_statusEditor.Options.IndentationSize}";
     }
 
     private Control BuildUI()
@@ -812,6 +928,9 @@ public class MainWindow : Window
 
 
         var mainGrid = CreateMainLayoutWithOutputSplitter();
+        var statusBar = CreateStatusBar();
+        DockPanel.SetDock(statusBar, Dock.Bottom);
+        rootLayout.Children.Add(statusBar);
         // Add overlay for modal dialogs
         rootLayout.Children.Add(mainGrid);
         return rootLayout;
@@ -1507,6 +1626,7 @@ public class MainWindow : Window
                         request.Cancel();
                     _documentDiagnostics.Remove(documentId);
                     _diagnosticsPanel.SetDiagnostics(_documentDiagnostics.Values.SelectMany(items => items).Select(Convert));
+                    UpdateStatusBar();
                 });
             }
         });
@@ -1534,6 +1654,7 @@ public class MainWindow : Window
 
             _documentDiagnostics[documentId] = diagnostics;
             _diagnosticsPanel.SetDiagnostics(_documentDiagnostics.Values.SelectMany(items => items).Select(Convert));
+            UpdateStatusBar();
             foreach (var tab in _tabs.Items.OfType<TabItem>())
             {
                 if (FindEditorInContent(tab.Content) is { } editor && editor.DocumentId == documentId)
