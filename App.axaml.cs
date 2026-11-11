@@ -188,10 +188,10 @@ public class MainWindow : Window
 	private TabItem _nuGetTab = null!;
     private TerminalWidget _terminal = null!;
 	private readonly MainMenuWidget _menu = new();
-    private readonly TreeView _hierarchyTree;
+    private TreeView _hierarchyTree;
 	private EnvironmentWidget _env = null!;
 	private readonly AstViewer _astViewer = new();
-    private readonly DotnetRunner _runner;
+    private DotnetRunner _runner;
     private readonly WindowNotificationManager _notificationManager = new WindowNotificationManager()
         {
             Position = NotificationPosition.TopRight,
@@ -532,7 +532,7 @@ public class MainWindow : Window
 	// Add a method to create a better layout with splitter between editors and output
 	private static void ConfigureTabStrip(TabControl tabControl)
 	{
-		tabControl.ItemsPanel = new FuncTemplate<Panel>(() => new StackPanel
+		tabControl.ItemsPanel = new FuncTemplate<Panel?>(() => new StackPanel
 		{
 			Orientation = Orientation.Horizontal
 		});
@@ -695,6 +695,13 @@ public class MainWindow : Window
 	// Update your MainWindow constructor to use the new layout
 	public MainWindow()
 	{
+		var root = new HotReloadRoot(BuildUI);
+        Content = root;
+        HotReloadService.Register(root);
+	}
+
+	private Control BuildUI()
+	{
 		Title = "CAAI IDE";
 		Width = 1200;
 		Height = 800;
@@ -753,7 +760,7 @@ public class MainWindow : Window
         var mainGrid = CreateMainLayoutWithOutputSplitter();
 		// Add overlay for modal dialogs
 		rootLayout.Children.Add(mainGrid);
-		Content = rootLayout;
+		return rootLayout;
 	}
 
     private void SetupEnvironment()

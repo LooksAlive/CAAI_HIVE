@@ -36,12 +36,12 @@ public static class RoslynCompiler
     }
 }
 
-public class HotReloadService
+public class IDEHotReloadService
 {
     private EmitBaseline _baseline = null!;
     private Assembly _assembly = null!;
 	
-	public HotReloadService(Assembly assembly, EmitBaseline baseline)
+	public IDEHotReloadService(Assembly assembly, EmitBaseline baseline)
 	{
 		Initialize(assembly, baseline);
 	}
