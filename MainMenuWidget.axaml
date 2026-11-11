@@ -52,10 +52,17 @@
             <MenuItem Header="_Run" Foreground="White">
                 <MenuItem Header="_Start Debugging" InputGesture="F5" Name="MenuRunProject" Foreground="White"/>
                 <MenuItem Header="Run _Without Debugging" InputGesture="Ctrl+F5" Name="MenuRunNoDebug" Foreground="White"/>
+                <MenuItem Header="_Pause" InputGesture="F6" Name="MenuDebugPause" Foreground="White"/>
+                <MenuItem Header="_Stop Debugging" InputGesture="Shift+F5" Name="MenuDebugStop" Foreground="White"/>
+                <MenuItem Header="_Restart Debugging" InputGesture="Ctrl+Shift+F5" Name="MenuDebugRestart" Foreground="White"/>
                 <MenuItem Header="Step _Into" InputGesture="F11" Name="MenuStepInto" Foreground="White"/>
                 <MenuItem Header="Step _Over" InputGesture="F10" Name="MenuStepOver" Foreground="White"/>
+                <MenuItem Header="Step O_ut" InputGesture="Shift+F11" Name="MenuStepOut" Foreground="White"/>
                 <Separator/>
                 <MenuItem Header="Toggle Breakpoint" InputGesture="F9" Name="MenuToggleBreakpoint" Foreground="White"/>
+                <Separator/>
+                <MenuItem Header="Select Debug Project..." Name="MenuDebugProject" Foreground="White"/>
+                <MenuItem Header="Launch Settings..." Name="MenuDebugSettings" Foreground="White"/>
             </MenuItem>
 
             <MenuItem Header="_Tools" Foreground="White">

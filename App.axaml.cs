@@ -23,6 +23,8 @@ using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using Avalonia.Controls.Notifications;
 using Location = Microsoft.CodeAnalysis.Location;
+using Symbol = FluentAvalonia.UI.Controls.Symbol;
+using SymbolIcon = FluentAvalonia.UI.Controls.SymbolIcon;
 
 namespace CAAI;
 
@@ -87,7 +89,7 @@ public sealed class App : Application
     private void GlobalHotReloadInterceptor(object? sender, KeyEventArgs e)
     {
         // Change to your preferred hot reload key combination
-        if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.None)
+        if (e.Key == Key.F5 && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Alt))
         {
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
@@ -189,7 +191,7 @@ public class HierarchyNode
     public List<HierarchyNode> DerivedTypes { get; set; } = [];
 }
 
-public class MainWindow : Window
+public partial class MainWindow : Window
 {
     private TabControl _tabs = new TabControl
     {
@@ -200,6 +202,7 @@ public class MainWindow : Window
         TabStripPlacement = Dock.Top
     };
     private DockPanel _sideTabs = null!;
+    private string _activeSideView = "Files";
     private CodeStructureWidget _structureTree = new();
     private FileExplorerWidget _filesTreeView = null!;
     private readonly ObjectInspectorWidget1 _inspector = new();
@@ -626,46 +629,100 @@ public class MainWindow : Window
 		};
 		*/
 
-        var views = new Dictionary<string, Control>
+        var views = new (string Name, Symbol Icon, Control View)[]
         {
-            { "📁 Files", _filesTreeView },
-            { "📐 Structure", _structureTree },
-            { "🌲 Hierarchy", _hierarchyTree },
-            { "🔍 Inspector", _inspector },
-            { "⚙️ Environment", _env },
-            { "🌳 AST", _astViewer }
+            ("Files", Symbol.Folder, _filesTreeView),
+            ("Structure", Symbol.List, _structureTree),
+            ("Hierarchy", Symbol.Library, _hierarchyTree),
+            ("Inspector", Symbol.Find, _inspector),
+            ("Environment", Symbol.Setting, _env),
+            ("AST", Symbol.Document, _astViewer)
         };
-
-        var selector = new ComboBox
+        var selectedView = views.First(view => view.Name == _activeSideView);
+        var heading = new TextBlock
         {
-            ItemsSource = views.Keys.ToList(),
-            SelectedIndex = 0,
-            Margin = new Thickness(2)
+            Text = selectedView.Name,
+            FontSize = 14,
+            FontWeight = FontWeight.SemiBold,
+            Margin = new Thickness(10, 10, 8, 8),
+            TextTrimming = TextTrimming.CharacterEllipsis
         };
-
         var content = new ContentControl
         {
-            Content = views.Values.First(),
+            Content = selectedView.View,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
         };
-
-        selector.SelectionChanged += (_, _) =>
+        var tools = new StackPanel { Spacing = 2, Margin = new Thickness(0, 4) };
+        tools.Styles.Add(new Style(selector => selector.OfType<RadioButton>().Class(":pointerover"))
         {
-            if (selector.SelectedItem is string key)
-                content.Content = views[key];
+            Setters = { new Setter(TemplatedControl.BackgroundProperty, new SolidColorBrush(Color.FromRgb(50, 50, 55))) }
+        });
+        tools.Styles.Add(new Style(selector => selector.OfType<RadioButton>().Class(":checked"))
+        {
+            Setters =
+            {
+                new Setter(TemplatedControl.BackgroundProperty, new SolidColorBrush(Color.FromRgb(42, 59, 65))),
+                new Setter(TemplatedControl.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(80, 190, 200)))
+            }
+        });
+        var group = Guid.NewGuid().ToString();
+        foreach (var view in views)
+        {
+            var button = new RadioButton
+            {
+                GroupName = group,
+                IsChecked = view.Name == _activeSideView,
+                Width = 40,
+                Height = 40,
+                Margin = new Thickness(2, 0),
+                BorderThickness = new Thickness(2, 0, 0, 0),
+                Content = new SymbolIcon { Symbol = view.Icon, FontSize = 20 },
+                Template = new FuncControlTemplate<RadioButton>((owner, _) =>
+                {
+                    var border = new Border
+                    {
+                        BorderThickness = new Thickness(2, 0, 0, 0),
+                        Child = new Avalonia.Controls.Presenters.ContentPresenter
+                        {
+                            Content = owner.Content,
+                            HorizontalContentAlignment = HorizontalAlignment.Center,
+                            VerticalContentAlignment = VerticalAlignment.Center
+                        }
+                    };
+                    border.Bind(Border.BackgroundProperty, new Avalonia.Data.Binding(nameof(Background)) { Source = owner });
+                    border.Bind(Border.BorderBrushProperty, new Avalonia.Data.Binding(nameof(BorderBrush)) { Source = owner });
+                    return border;
+                })
+            };
+            ToolTip.SetTip(button, view.Name);
+            Avalonia.Automation.AutomationProperties.SetName(button, view.Name);
+            button.IsCheckedChanged += (_, _) =>
+            {
+                if (button.IsChecked != true) return;
+                _activeSideView = view.Name;
+                heading.Text = view.Name;
+                content.Content = view.View;
+                if (view.Name == "AST") RefreshActiveAst();
+            };
+            tools.Children.Add(button);
+        }
+        var rail = new ScrollViewer
+        {
+            Width = 44,
+            Background = new SolidColorBrush(Color.FromRgb(27, 27, 31)),
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = tools
         };
-
+        var viewPanel = new Grid { RowDefinitions = new RowDefinitions("Auto, *") };
+        viewPanel.Children.Add(heading);
+        Grid.SetRow(content, 1);
+        viewPanel.Children.Add(content);
         _sideTabs = new DockPanel();
-
-        DockPanel.SetDock(selector, Dock.Top);
-        _sideTabs.Children.Add(selector);
-        _sideTabs.Children.Add(content);
-
-
-
-
-
+        DockPanel.SetDock(rail, Dock.Left);
+        _sideTabs.Children.Add(rail);
+        _sideTabs.Children.Add(viewPanel);
 
         // Left splitter
         var leftSplitter = new GridSplitter
@@ -704,6 +761,8 @@ public class MainWindow : Window
 
         _outputTabs.Items.Add(new TabItem { Header = "⚠️ Diagnostics", Content = _diagnosticsPanel });
         _outputTabs.Items.Add(new TabItem { Header = "👨‍💻 Terminal", Content = _terminal });
+        _debugTab = new TabItem { Header = "Debug", Content = _debugPanel };
+        _outputTabs.Items.Add(_debugTab);
         _nuGetTab = new TabItem { Header = "📦 NuGet", Content = _nuGetPackageManager };
         _outputTabs.Items.Add(_nuGetTab);
 
@@ -775,6 +834,7 @@ public class MainWindow : Window
         _nuGetPackageManager = new NuGetPackageManager(_notificationManager, _baseDir);
         _nuGetPackageManager.OutputAppended += (_, message) => _terminal.AppendOutput(message + Environment.NewLine);
         _runner = new DotnetRunner(_terminal);
+        InitializeDebugging();
         KeyDown += Window_KeyDown;
         AddHandler(KeyDownEvent, OnGlobalKeyDown, RoutingStrategies.Tunnel);
         var root = new HotReloadRoot(BuildUI);
@@ -862,6 +922,7 @@ public class MainWindow : Window
             _statusEditor.TextChanged += OnStatusEditorChanged;
         }
         UpdateStatusBar();
+        if (_activeSideView == "AST") RefreshActiveAst();
     }
 
     private void OnStatusEditorChanged(object? sender, EventArgs e) => UpdateStatusBar();
@@ -900,13 +961,14 @@ public class MainWindow : Window
         var previous = (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
             _statusFile, _statusDiagnostics, _statusPosition, _statusMode,
             _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
-            _outputSplitter, _nuGetTab, _hierarchyTree, _env);
+            _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab);
         var restoreControls = new Stack<Action>();
         var outputVisible = _outputDock?.IsVisible ?? true;
         var outputHeight = _mainGrid?.RowDefinitions[2].Height ?? _outputHeight;
+        var selectedOutput = (_outputTabs?.SelectedItem as TabItem)?.Header?.ToString();
         try
         {
-            foreach (var control in new Control[] { _tabs, _inspector, _terminal, _nuGetPackageManager })
+            foreach (var control in new Control[] { _tabs, _inspector, _terminal, _nuGetPackageManager, _debugPanel })
                 restoreControls.Push(DetachForRebuild(control));
 
             _menu = new MainMenuWidget();
@@ -920,6 +982,9 @@ public class MainWindow : Window
             _statusMode = new TextBlock { Width = 140, TextAlignment = TextAlignment.Right };
 
             var layout = BuildLayout();
+            var outputTabs = _outputTabs!;
+            if (selectedOutput != null)
+                outputTabs.SelectedItem = outputTabs.Items.OfType<TabItem>().FirstOrDefault(tab => tab.Header?.ToString() == selectedOutput);
             _mainGrid!.RowDefinitions[2].Height = outputHeight;
             _outputDock!.IsVisible = outputVisible;
             _outputSplitter.IsVisible = outputVisible;
@@ -933,7 +998,7 @@ public class MainWindow : Window
             (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
                 _statusFile, _statusDiagnostics, _statusPosition, _statusMode,
                 _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
-                _outputSplitter, _nuGetTab, _hierarchyTree, _env) = previous;
+                _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab) = previous;
             while (restoreControls.TryPop(out var restore))
                 restore();
             throw;
@@ -977,10 +1042,16 @@ public class MainWindow : Window
     {
 
         // Setup toolbar events
-        _toolbar.OnRunRequested += () => _runner.Run(_baseDir);
-        _toolbar.OnStopRequested += () => _runner.Stop();
-        _toolbar.OnDebugRequested += () => _runner.Run(_baseDir, "Debug");
-        _toolbar.OnBuildRequested += () => _runner.Build(_baseDir);
+        _toolbar.OnRunRequested += () => RunDebugAction(RunWithoutDebuggingAsync);
+        _toolbar.OnStopRequested += () => RunDebugAction(StopExecutionAsync);
+        _toolbar.OnDebugRequested += () => RunDebugAction(StartOrContinueDebuggingAsync);
+        _toolbar.OnBuildRequested += () => RunDebugAction(BuildDebugProjectAsync);
+        _toolbar.OnPauseRequested += () => RunDebugAction(_debugSession.PauseAsync);
+        _toolbar.OnStepOverRequested += () => RunDebugAction(() => ExecuteDebugCommandAsync("next"));
+        _toolbar.OnStepIntoRequested += () => RunDebugAction(() => ExecuteDebugCommandAsync("stepIn"));
+        _toolbar.OnStepOutRequested += () => RunDebugAction(() => ExecuteDebugCommandAsync("stepOut"));
+        _toolbar.OnRestartRequested += () => RunDebugAction(RestartDebuggingAsync);
+        _toolbar.SetDebugState(_debugSession.State);
         _toolbar.OnSearchRequested += ShowSearchDialog; // Add search button to toolbar
 
         var rootNode = new FileSystemNode(_baseDir, true);
@@ -1040,6 +1111,21 @@ public class MainWindow : Window
                 NavigateToLocation(args.Location);
             }
         };
+    }
+
+    private void RefreshActiveAst()
+    {
+        if (_statusEditor == null)
+        {
+            _astViewer.SyntaxTree = null;
+            return;
+        }
+
+        var tab = _tabs.SelectedItem as TabItem;
+        var path = FindEditorInContent(tab?.Content)?.FilePath ?? "";
+        var tree = CSharpSyntaxTree.ParseText(_statusEditor.Text, path: path);
+        currentSyntaxTree = tree;
+        _astViewer.SyntaxTree = tree.GetRoot();
     }
 
     private void NavigateToLocation(Location location)
@@ -1267,40 +1353,18 @@ public class MainWindow : Window
         };
 
         // === Run/Debug Menu ===
-        _menu.OnRunProject += () => _runner.Run(_baseDir);
-        _menu.OnRunNoDebug += () => _runner.Run(_baseDir, "Release");
-        _menu.OnStepInto += () =>
-        {
-            // TODO: Implement debugger step-into
-
-        };
-        _menu.OnStepOver += () =>
-        {
-            // TODO: Implement debugger step-over
-        };
-        _menu.OnToggleBreakpoint += () =>
-        {
-            if (_tabs.SelectedItem is TabItem tab)
-            {
-                var editor = FindEditorInContent(tab.Content);
-                if (editor != null)
-                {
-                    var line = editor._editor.Document.GetLineByOffset(editor._editor.CaretOffset).LineNumber;
-                    // TODO: Toggle breakpoint at line
-                    var toast = new Notification(
-                        title: "Info",
-                        message: $"[Debug] Breakpoint toggled at line {line}",
-                        type: NotificationType.Information,
-                        expiration: TimeSpan.FromSeconds(5),
-                        onClick: () => Console.WriteLine("User clicked the notification!"),
-                        onClose: () => Console.WriteLine("Notification dismissed.")
-                    );
-
-                    // Send to the manager screen container
-                    _notificationManager.Show(toast);
-                }
-            }
-        };
+        _menu.OnRunProject += () => RunDebugAction(StartOrContinueDebuggingAsync);
+        _menu.OnRunNoDebug += () => RunDebugAction(RunWithoutDebuggingAsync);
+        _menu.OnStepInto += () => RunDebugAction(() => ExecuteDebugCommandAsync("stepIn"));
+        _menu.OnStepOver += () => RunDebugAction(() => ExecuteDebugCommandAsync("next"));
+        _menu.OnToggleBreakpoint += ToggleActiveBreakpoint;
+        _menu.OnPauseDebug += () => RunDebugAction(_debugSession.PauseAsync);
+        _menu.OnStopDebug += () => RunDebugAction(StopExecutionAsync);
+        _menu.OnRestartDebug += () => RunDebugAction(RestartDebuggingAsync);
+        _menu.OnStepOut += () => RunDebugAction(() => ExecuteDebugCommandAsync("stepOut"));
+        _menu.OnSelectDebugProject += () => RunDebugAction(async () => { await SelectDebugProjectAsync(forcePicker: true); });
+        _menu.OnDebugSettings += () => RunDebugAction(OpenDebugSettingsAsync);
+        _menu.SetDebugState(_debugSession.State);
 
         // === Tools/Help Menu ===
         _menu.OnOpenNuGetManager += () =>
@@ -1799,6 +1863,7 @@ public class MainWindow : Window
         var docId = RegisterFileInWorkspace(path, src);
 
         var editor = new CodeEditor(path, _workspace, docId, src);
+        editor.ConfigureDebugging(_debugBreakpoints);
         // Subscribe to events
         editor.GoToDefinitionRequested += OnGoToDefinitionRequested;
         editor.FindReferencesRequested += OnFindReferencesRequested;
@@ -1834,6 +1899,7 @@ public class MainWindow : Window
 
         closeButton.Click += (_, _) =>
         {
+            editor.CloseEditor();
             _tabs.Items.Remove(tab);
         };
 

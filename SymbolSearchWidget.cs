@@ -45,8 +45,8 @@ public record SymbolItemViewModel(ISymbol Symbol, string ProjectName)
                 // Add return type for methods/properties
                 if (Symbol is IMethodSymbol method && !method.MethodKind.ToString().Contains("Constructor"))
                 {
-                    var returnType = method.ReturnType.Name;
-                    return $"{kind} • {returnType} {Symbol.Name}{accessibility} • {location}";
+                    var signature = method.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+                    return $"{kind} • {signature}{accessibility} • {location}";
                 }
                 if (Symbol is IPropertySymbol property)
                 {
@@ -798,13 +798,13 @@ public class SymbolSearchWidget : UserControl
     {
         return filter switch
         {
-            SymbolKindFilter.Classes => symbols.Where(s => s.Kind == SymbolKind.NamedType && !s.IsAbstract),
+            SymbolKindFilter.Classes => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Class),
             SymbolKindFilter.Methods => symbols.Where(s => s.Kind == SymbolKind.Method),
             SymbolKindFilter.Properties => symbols.Where(s => s.Kind == SymbolKind.Property),
             SymbolKindFilter.Fields => symbols.Where(s => s.Kind == SymbolKind.Field),
-            //SymbolKindFilter.Interfaces => symbols.Where(s => s.Kind == SymbolKind.Interface),
-            //SymbolKindFilter.Enums => symbols.Where(s => s.Kind == SymbolKind.Enum),
-            //SymbolKindFilter.Structs => symbols.Where(s => s.Kind == SymbolKind.Struct),
+            SymbolKindFilter.Interfaces => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Interface),
+            SymbolKindFilter.Enums => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Enum),
+            SymbolKindFilter.Structs => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Struct),
             _ => symbols
         };
     }

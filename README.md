@@ -1,5 +1,53 @@
 # CAAI_HIVE
 
+## Debugging
+
+CAAI uses the open-source [netcoredbg](https://github.com/Samsung/netcoredbg) Debug Adapter Protocol backend, not VS Code's private debugger installation.
+
+On Windows x64, install the pinned adapter into your user profile:
+
+```powershell
+.\Debugging\Install-NetCoreDbg.ps1
+```
+
+The installer verifies the official release SHA-256 checksum and requires no administrator privileges. CAAI automatically discovers this installation. Other installations can be selected with `CAAI_DEBUG_ADAPTER` (the full executable path), `AdapterPath` in launch settings, or `netcoredbg` on `PATH`. The adapter must match the runtime/platform architecture.
+
+Select **Run > Select Debug Project** or the folder button in the **Debug** output tab to choose an executable C# project. The sole project in the initial workspace folder is selected automatically. Debug builds use portable PDBs and disable optimization; build and debuggee output appears in **Terminal**. Modified open files require confirmation before they are saved for the build.
+
+| Action | Shortcut |
+| --- | --- |
+| Start / Continue | F5 |
+| Run without debugging | Ctrl+F5 |
+| Stop | Shift+F5 |
+| Restart | Ctrl+Shift+F5 |
+| Pause | F6 |
+| Step over / into / out | F10 / F11 / Shift+F11 |
+| Toggle breakpoint | F9 or click the editor gutter |
+| Build | Ctrl+Shift+B |
+
+Breakpoints are persisted under the user's local application data in `CAAI/debugging/breakpoints.json`. Hollow markers are pending/unverified or disabled; filled red markers are verified by the adapter. Line anchors follow edits, but executing a changed source file requires rebuilding/restarting the session. Use **Debug > Breakpoints** to enable/disable, remove, or set a C# condition. Hover a breakpoint entry for the adapter's diagnostic message.
+
+When paused, **Debug > Call Stack & Variables** lists threads and stack frames. Selecting a frame opens its source, highlights the execution line, and loads that frame's scopes. Expand scopes and variables to fetch children on demand (200 variables per expansion). **Watches** evaluates expressions in the selected frame; expressions and property evaluation may execute debuggee code. Snapshots are invalidated when execution resumes.
+
+**Run > Launch Settings** creates/opens `.caai/launch.json` beside the selected project. Example:
+
+```json
+{
+	"AdapterPath": null,
+	"TargetFramework": "net10.0",
+	"WorkingDirectory": ".",
+	"Arguments": ["--example"],
+	"Environment": { "MY_SETTING": "development" },
+	"StopAtEntry": false,
+	"JustMyCode": true,
+	"ExceptionFilters": []
+}
+```
+
+Set `TargetFramework` for multi-targeted projects. Paths in launch settings are relative to the project directory. `ExceptionFilters` can include `"all"` to break on thrown managed exceptions; unsupported filter names are rejected with the adapter's supported values. Keep secrets out of checked-in launch settings.
+
+This implementation launches managed projects; attach, native debugging, and interactive debuggee stdin/terminal emulation are not implemented. Unsupported edit-and-continue changes require a restart. The IDE's manual UI-rebuild shortcut is Ctrl+Alt+F5, leaving F5 available for debugging.
+
 ## Object Inspector
 
 The notebook inspector and the standalone `ObjectInspectorWidget` share one implementation. `ObjectInspectorWidget1` remains a compatibility subclass for existing notebook callers.
@@ -26,4 +74,4 @@ var order = new ObjectNode("order", "Order", "{Order}",
 inspector.SetNodes([order], "Locals");
 ```
 
-The child provider is called on expansion. Honor its cancellation token and provide bounded or paged child lists. Subscribe to `RefreshRequested` to fetch fresh backend values, and replace the snapshot after a pause or step. A debugger adapter must implement the actual debugger connection; the inspector does not start or control a debugging session.
+The child provider is called on expansion. Honor its cancellation token and provide bounded or paged child lists. Subscribe to `RefreshRequested` to fetch fresh backend values, and replace the snapshot after a pause or step. `DebugSession` now supplies these snapshots through netcoredbg; the inspector itself remains independent of the debugger transport.

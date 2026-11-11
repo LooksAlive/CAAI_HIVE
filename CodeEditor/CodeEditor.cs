@@ -65,6 +65,17 @@ public class CodeEditor : UserControl
     public event EventHandler? Saved;
     public event EventHandler? SaveRequested;
     private BreadcrumbBar _breadcrumbBar = new();
+    private BreakpointMargin? _breakpointMargin;
+
+    public void ConfigureDebugging(BreakpointStore breakpoints)
+    {
+        if (_breakpointMargin != null || !FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return;
+        _breakpointMargin = new BreakpointMargin(_editor, breakpoints, FilePath);
+        _editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
+    }
+
+    public void ToggleBreakpoint() => _breakpointMargin?.ToggleAtCaret();
+    public void SetExecutionLine(int? line) => _breakpointMargin?.SetExecutionLine(line);
     
     public event EventHandler<GoToDefinitionEventArgs>? GoToDefinitionRequested;
     public event EventHandler<FindReferencesEventArgs>? FindReferencesRequested;
@@ -135,6 +146,7 @@ public class CodeEditor : UserControl
 
     public void CloseEditor()
     {
+        _breakpointMargin?.Dispose();
         _editor.TextChanged -= OnTextChanged;
         var solution = _workspace.CurrentSolution.RemoveDocument(_documentId);
         _workspace.TryApplyChanges(solution);
@@ -357,7 +369,12 @@ public class CodeEditor : UserControl
     
     private async void Editor_KeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        if (e.Key == Key.F9 && e.KeyModifiers == KeyModifiers.None)
+        {
+            ToggleBreakpoint();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             Save();
             e.Handled = true;
@@ -468,6 +485,9 @@ public class CodeEditor : UserControl
         var goToLineItem = new MenuItem { Header = "Go to Line..." };
         goToLineItem.Click += (_, _) => ShowGoToLineDialog();
 
+        var breakpointItem = new MenuItem { Header = "Toggle Breakpoint", InputGesture = new KeyGesture(Key.F9) };
+        breakpointItem.Click += (_, _) => ToggleBreakpoint();
+
         contextMenu.Items.Add(cutItem);
         contextMenu.Items.Add(copyItem);
         contextMenu.Items.Add(pasteItem);
@@ -481,6 +501,7 @@ public class CodeEditor : UserControl
         contextMenu.Items.Add(separator3);
         contextMenu.Items.Add(selectAllItem);
         contextMenu.Items.Add(goToLineItem);
+        contextMenu.Items.Add(breakpointItem);
 
         _editor.ContextMenu = contextMenu;
     }
