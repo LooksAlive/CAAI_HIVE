@@ -9,6 +9,7 @@ using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Folding;
+using AvaloniaEdit.Rendering;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.Completion;
@@ -57,6 +58,8 @@ public class CodeEditor : UserControl
     private AdhocWorkspace _workspace;
     private DocumentId _documentId;
     private bool _isUpdating;
+    private readonly DiagnosticRenderer _diagnosticRenderer = new();
+    internal DocumentId DocumentId => _documentId;
     public event EventHandler<string>? TextChanged;
     public event EventHandler? Saved;
     public event EventHandler? SaveRequested;
@@ -112,6 +115,7 @@ public class CodeEditor : UserControl
 
     private void OnTextChanged(object? sender, EventArgs e)
     {
+        SetDiagnostics([]);
         if (_isUpdating) return;
         
         _isUpdating = true;
@@ -176,6 +180,7 @@ public class CodeEditor : UserControl
         };
 
         ConfigureEditorOptions();
+        _editor.TextArea.TextView.BackgroundRenderers.Add(_diagnosticRenderer);
         SetupEventHandlers();
         SetupFolding();
         SetupContextMenu();
@@ -230,6 +235,57 @@ public class CodeEditor : UserControl
     }
 
     private void OnSettingsChanged(object? sender, EventArgs e) => ApplyEditorSettings();
+
+    public void SetDiagnostics(IEnumerable<Diagnostic> diagnostics)
+    {
+        _diagnosticRenderer.Diagnostics = diagnostics
+            .Where(diagnostic => diagnostic.Location.IsInSource &&
+                diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+            .ToArray();
+        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+    }
+
+    private sealed class DiagnosticRenderer : IBackgroundRenderer
+    {
+        public Diagnostic[] Diagnostics { get; set; } = [];
+        public KnownLayer Layer => KnownLayer.Selection;
+
+        public void Draw(TextView textView, DrawingContext drawingContext)
+        {
+            if (!textView.VisualLinesValid || textView.Document is not { } document)
+                return;
+
+            foreach (var diagnostic in Diagnostics)
+            {
+                var span = diagnostic.Location.SourceSpan;
+                if (span.Start > document.TextLength || span.End > document.TextLength)
+                    continue;
+
+                var start = span.Start;
+                var length = span.Length;
+                if (length == 0 && document.TextLength > 0)
+                {
+                    start = Math.Min(start, document.TextLength - 1);
+                    length = 1;
+                }
+
+                var pen = new Pen(diagnostic.Severity == DiagnosticSeverity.Error
+                    ? Brushes.Red : Brushes.Orange, 1);
+                foreach (var rectangle in BackgroundGeometryBuilder.GetRectsForSegment(
+                    textView, new SimpleSegment(start, length)))
+                {
+                    var right = Math.Max(rectangle.Right, rectangle.Left + 4);
+                    for (var position = rectangle.Left; position < right; position += 4)
+                    {
+                        drawingContext.DrawLine(pen, new Point(position, rectangle.Bottom - 1),
+                            new Point(Math.Min(position + 2, right), rectangle.Bottom - 3));
+                        drawingContext.DrawLine(pen, new Point(Math.Min(position + 2, right), rectangle.Bottom - 3),
+                            new Point(Math.Min(position + 4, right), rectangle.Bottom - 1));
+                    }
+                }
+            }
+        }
+    }
 
     private void ApplyEditorSettings()
     {

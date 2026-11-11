@@ -27,6 +27,9 @@ public partial class MainMenuWidget : UserControl
     public event Action<bool>? OnToggleExplorer;
     public event Action<bool>? OnToggleStructure;
     public event Action<bool>? OnToggleWordWrap;
+    public event Action<bool>? OnToggleOutput;
+
+    public void SetOutputVisible(bool visible) => MenuToggleOutput.IsChecked = visible;
 
     public event Action? OnRunProject;
     public event Action? OnRunNoDebug;
@@ -69,6 +72,7 @@ public partial class MainMenuWidget : UserControl
         MenuToggleExplorer.Click += (s, e) => OnToggleExplorer?.Invoke(MenuToggleExplorer.IsChecked);
         MenuToggleStructure.Click += (s, e) => OnToggleStructure?.Invoke(MenuToggleStructure.IsChecked);
         MenuToggleWordWrap.Click += (s, e) => OnToggleWordWrap?.Invoke(MenuToggleWordWrap.IsChecked);
+        MenuToggleOutput.Click += (s, e) => OnToggleOutput?.Invoke(MenuToggleOutput.IsChecked);
 
         // === Run / Debug Subscriptions ===
         MenuRunProject.Click      += (s, e) => OnRunProject?.Invoke();

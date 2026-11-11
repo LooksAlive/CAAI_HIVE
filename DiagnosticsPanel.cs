@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using System.Collections.ObjectModel;
@@ -59,6 +60,7 @@ public class DiagnosticsPanel : UserControl
             {
                 ColumnDefinitions = new ColumnDefinitions("Auto, Auto, *, Auto"),
                 MinHeight = 28,
+                Background = Brushes.Transparent,
                 Margin = new Thickness(2, 0)
             };
 
@@ -121,11 +123,12 @@ public class DiagnosticsPanel : UserControl
             row.Children.Add(message);
             row.Children.Add(location);
 
-            row.PointerPressed += (_, e) =>
+            row.AddHandler(PointerPressedEvent, (_, e) =>
             {
-                if (!location.IsPointerOver)
+                if (e.GetCurrentPoint(row).Properties.IsLeftButtonPressed &&
+                    !new Rect(location.Bounds.Size).Contains(e.GetPosition(location)))
                     OnDiagnosticClicked?.Invoke(x);
-            };
+            }, RoutingStrategies.Tunnel, handledEventsToo: true);
 
             return row;
         });
@@ -181,11 +184,12 @@ public class DiagnosticsPanel : UserControl
     // Thread-safe update
     public void SetDiagnostics(IEnumerable<DiagnosticItem> diagnostics)
     {
+        var snapshot = diagnostics.ToList();
         Dispatcher.UIThread.Post(() =>
         {
             _items.Clear();
 
-            var items = diagnostics
+            var items = snapshot
                 .OrderByDescending(item => item.Severity)
                 .ThenBy(item => item.FilePath, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(item => item.Line)

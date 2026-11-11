@@ -198,6 +198,12 @@ public class MainWindow : Window
     private readonly DiagnosticsPanel _diagnosticsPanel = new();
     private NuGetPackageManager _nuGetPackageManager = null!;
     private TabControl _outputTabs = null!;
+    private Grid _mainGrid = null!;
+    private Grid _outputDock = null!;
+    private GridSplitter _outputSplitter = null!;
+    private GridLength _outputHeight = new(250);
+    private readonly Dictionary<DocumentId, List<Diagnostic>> _documentDiagnostics = new();
+    private readonly Dictionary<DocumentId, CancellationTokenSource> _diagnosticRequests = new();
     private TabItem _nuGetTab = null!;
     private TerminalWidget _terminal = null!;
     private readonly MainMenuWidget _menu = new();
@@ -685,6 +691,22 @@ public class MainWindow : Window
         _nuGetTab = new TabItem { Header = "📦 NuGet", Content = _nuGetPackageManager };
         _outputTabs.Items.Add(_nuGetTab);
 
+        _mainGrid = mainGrid;
+        _outputSplitter = bottomSplitter;
+        _outputDock = new Grid { RowDefinitions = new RowDefinitions("Auto, *") };
+        var closeOutput = new Button
+        {
+            Content = "\u00d7",
+            Width = 28,
+            Height = 24,
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        ToolTip.SetTip(closeOutput, "Close output window");
+        closeOutput.Click += (_, _) => SetOutputVisible(false);
+        _outputDock.Children.Add(closeOutput);
+        Grid.SetRow(_outputTabs, 1);
+        _outputDock.Children.Add(_outputTabs);
 
         // Position everything in the grid
         Grid.SetColumn(_sideTabs, 0);
@@ -700,17 +722,28 @@ public class MainWindow : Window
         Grid.SetRow(bottomSplitter, 1);
         Grid.SetColumnSpan(bottomSplitter, 3);
 
-        Grid.SetColumn(_outputTabs, 0);
-        Grid.SetRow(_outputTabs, 2);
-        Grid.SetColumnSpan(_outputTabs, 3);
+        Grid.SetColumn(_outputDock, 0);
+        Grid.SetRow(_outputDock, 2);
+        Grid.SetColumnSpan(_outputDock, 3);
 
         mainGrid.Children.Add(_sideTabs);
         mainGrid.Children.Add(leftSplitter);
         mainGrid.Children.Add(_tabs);
         mainGrid.Children.Add(bottomSplitter);
-        mainGrid.Children.Add(_outputTabs);
+        mainGrid.Children.Add(_outputDock);
 
         return mainGrid;
+    }
+
+    private void SetOutputVisible(bool visible)
+    {
+        if (!visible && _outputDock.IsVisible)
+            _outputHeight = new GridLength(_mainGrid.RowDefinitions[2].ActualHeight);
+        _outputDock.IsVisible = visible;
+        _outputSplitter.IsVisible = visible;
+        _mainGrid.RowDefinitions[1].Height = new GridLength(visible ? 6 : 0);
+        _mainGrid.RowDefinitions[2].Height = visible ? _outputHeight : new GridLength(0);
+        _menu.SetOutputVisible(visible);
     }
 
     // Update your MainWindow constructor to use the new layout
@@ -1000,6 +1033,7 @@ public class MainWindow : Window
         };
 
         // === View Menu ===
+        _menu.OnToggleOutput += SetOutputVisible;
         _menu.OnToggleExplorer += (isChecked) =>
         {
             if (_filesTreeView?.Parent is Control filesPanel)
@@ -1063,7 +1097,11 @@ public class MainWindow : Window
         };
 
         // === Tools/Help Menu ===
-        _menu.OnOpenNuGetManager += () => _outputTabs.SelectedItem = _nuGetTab;
+        _menu.OnOpenNuGetManager += () =>
+        {
+            SetOutputVisible(true);
+            _outputTabs.SelectedItem = _nuGetTab;
+        };
         _menu.OnOpenSettings += async () => await ShowSettings();
 
         _menu.OnOpenAbout += () =>
@@ -1187,16 +1225,18 @@ public class MainWindow : Window
         if (string.IsNullOrEmpty(filePath)) return;
 
         OpenFile(filePath);
-        if (_tabs.SelectedItem is TabItem tab && FindEditorInContent(tab.Content) is CodeEditor editor)
+        if (_tabs.SelectedItem is TabItem tab && FindEditorInContent(tab.Content) is CodeEditor editor &&
+            string.Equals(editor.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
         {
-            var lineNumber = Math.Clamp(line + 1, 1, editor._editor.Document.LineCount);
-            editor.GoToLine(lineNumber);
-            if (column.HasValue)
+            Dispatcher.UIThread.Post(() =>
             {
+                if (!ReferenceEquals(_tabs.SelectedItem, tab)) return;
+                var lineNumber = Math.Clamp(line + 1, 1, editor._editor.Document.LineCount);
                 var lineSegment = editor._editor.Document.GetLineByNumber(lineNumber);
-                editor._editor.CaretOffset = lineSegment.Offset + Math.Clamp(column.Value, 0, lineSegment.Length);
-            }
-            editor.FocusEditor();
+                editor._editor.Select(lineSegment.Offset + Math.Clamp(column ?? 0, 0, lineSegment.Length), 0);
+                editor.FocusEditor();
+                editor._editor.ScrollTo(lineNumber, Math.Clamp(column ?? 0, 0, lineSegment.Length) + 1);
+            }, DispatcherPriority.Loaded);
         }
     }
 
@@ -1429,21 +1469,7 @@ public class MainWindow : Window
 
     private void HighlightDiagnostics(CodeEditor editor, IEnumerable<Diagnostic> diagnostics)
     {
-        // Clear old markers (requires a TextMarkerService or similar)
-        // _markerService.RemoveAll();
-
-        foreach (var diag in diagnostics)
-        {
-            if (diag.Severity == DiagnosticSeverity.Error)
-            {
-                // You can use the Document's TextSegments to highlight the range
-                int start = diag.Location.SourceSpan.Start;
-                int length = diag.Location.SourceSpan.Length;
-
-                // Example logic for a 'Squiggly' (simplified)
-                //_markerService.CreateMarker(start, length, Colors.Red);
-            }
-        }
+        editor.SetDiagnostics(diagnostics);
     }
 
     private static DiagnosticItem Convert(Microsoft.CodeAnalysis.Diagnostic d)
@@ -1468,53 +1494,98 @@ public class MainWindow : Window
 
     private void SetupLiveDiagnostics()
     {
-        _workspace.RegisterWorkspaceChangedHandler(async (sender) =>
+        _workspace.RegisterWorkspaceChangedHandler(change =>
         {
-            if (sender.Kind != WorkspaceChangeKind.DocumentChanged) return;
-            await Task.Delay(500);
-            if (sender.DocumentId == null) return;
-            var diagnostics = await GetDiagnosticsForDocument(sender.DocumentId);
-            var items = diagnostics
-                .Select(Convert)
-                .ToList();
-
-            _diagnosticsPanel.SetDiagnostics(items);
-            // If the active tab is this document, update the markers
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            if (change.DocumentId is not { } documentId) return;
+            if (change.Kind is WorkspaceChangeKind.DocumentChanged or WorkspaceChangeKind.DocumentAdded)
+                Dispatcher.UIThread.Post(() => _ = RefreshDiagnosticsAsync(documentId));
+            else if (change.Kind == WorkspaceChangeKind.DocumentRemoved)
             {
-                if (_tabs.SelectedItem is TabItem activeTab && activeTab.Tag is CodeEditor editor)
+                Dispatcher.UIThread.Post(() =>
                 {
-                    HighlightDiagnostics(editor, diagnostics);
-                }
-            });
+                    if (_diagnosticRequests.Remove(documentId, out var request))
+                        request.Cancel();
+                    _documentDiagnostics.Remove(documentId);
+                    _diagnosticsPanel.SetDiagnostics(_documentDiagnostics.Values.SelectMany(items => items).Select(Convert));
+                });
+            }
         });
+    }
+
+    private async Task RefreshDiagnosticsAsync(DocumentId documentId)
+    {
+        if (_diagnosticRequests.Remove(documentId, out var previousRequest))
+            previousRequest.Cancel();
+        using var request = new CancellationTokenSource();
+        _diagnosticRequests[documentId] = request;
+        var cancellationToken = request.Token;
+        try
+        {
+            await Task.Delay(300, cancellationToken);
+            var document = _workspace.CurrentSolution.GetDocument(documentId);
+            if (document == null) return;
+            var text = await document.GetTextAsync(cancellationToken);
+            var model = await document.GetSemanticModelAsync(cancellationToken);
+            if (model == null) return;
+            var diagnostics = await Task.Run(() => model.GetDiagnostics(cancellationToken: cancellationToken).ToList(), cancellationToken);
+            var currentDocument = _workspace.CurrentSolution.GetDocument(documentId);
+            if (currentDocument == null || !text.ContentEquals(await currentDocument.GetTextAsync(cancellationToken))) return;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _documentDiagnostics[documentId] = diagnostics;
+            _diagnosticsPanel.SetDiagnostics(_documentDiagnostics.Values.SelectMany(items => items).Select(Convert));
+            foreach (var tab in _tabs.Items.OfType<TabItem>())
+            {
+                if (FindEditorInContent(tab.Content) is { } editor && editor.DocumentId == documentId)
+                    HighlightDiagnostics(editor, diagnostics);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine($"Diagnostic analysis failed: {exception}");
+        }
+        finally
+        {
+            if (_diagnosticRequests.TryGetValue(documentId, out var pending) && ReferenceEquals(pending, request))
+                _diagnosticRequests.Remove(documentId);
+        }
     }
 
     private SyntaxTree? OpenFile(string path)
     {
-        //_tabs.Items.Any<CodeEditor>(i => i.FilePath == path);
-
-        List<StructureNode>? structureNodes = null;
-        if (path.EndsWith(".cs"))
+        try
         {
-            foreach (TabItem? t in _tabs.Items)
+            path = Path.GetFullPath(path);
+            foreach (var existingTab in _tabs.Items.OfType<TabItem>())
             {
-                if (t is not null &&
-                    FindEditorInContent(t.Content) is CodeEditor existingEditor &&
-                    string.Equals(Path.GetFullPath(existingEditor.FilePath), Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
+                if (FindEditorInContent(existingTab.Content) is { } existingEditor &&
+                    string.Equals(existingEditor.FilePath, path, StringComparison.OrdinalIgnoreCase))
                 {
-                    _tabs.SelectedItem = t;
-                    return null;
+                    _tabs.SelectedItem = existingTab;
+                    return CSharpSyntaxTree.ParseText(existingEditor.GetText(), path: path);
                 }
             }
+            if (!File.Exists(path)) return null;
+            return OpenExistingFile(path, File.ReadAllText(path));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            _notificationManager.Show(new Notification("Cannot open file", exception.Message, NotificationType.Error));
+            return null;
+        }
+    }
 
-            var tree = CSharpSyntaxTree.ParseText(File.ReadAllText(path));
+    private SyntaxTree? OpenExistingFile(string path, string src)
+    {
+        if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            var tree = CSharpSyntaxTree.ParseText(src, path: path);
             currentSyntaxTree = tree;
-            //_compilation = _compilation.AddSyntaxTrees(tree);
-            structureNodes = StructureBuilder.Build(tree);
         }
 
-        var src = File.Exists(path) ? File.ReadAllText(path) : "";
         var docId = RegisterFileInWorkspace(path, src);
 
         var editor = new CodeEditor(path, _workspace, docId, src);
@@ -1574,6 +1645,7 @@ public class MainWindow : Window
         _tabs.Items.Add(tab);
         _tabs.SelectedItem = tab;
 
+        _ = RefreshDiagnosticsAsync(docId);
         //return structureNodes;
         return currentSyntaxTree;
     }
