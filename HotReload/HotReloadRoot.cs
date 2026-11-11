@@ -1,3 +1,4 @@
+using System;
 using Avalonia.Controls;
 
 namespace CAAI;
@@ -14,10 +15,7 @@ public sealed class HotReloadRoot : ContentControl
 
     public void Rebuild()
     {
-        // Construct first, so a failed build doesn't destroy
-        // the currently displayed UI.
         var newContent = _factory();
-
         Content = newContent;
     }
 }

@@ -91,8 +91,8 @@ public class RunDebugToolbar : UserControl
         var stack = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Margin = new Thickness(10, 5),
+            Spacing = 2,
+            Margin = new Thickness(6, 3),
             VerticalAlignment = VerticalAlignment.Center
         };
 
@@ -107,14 +107,14 @@ public class RunDebugToolbar : UserControl
         
         // Build Button
         var buildBtn = CreateToolbarButton("🔨", "Build Project (Ctrl+Shift+B)", Brushes.SteelBlue, () => OnBuildRequested?.Invoke());
-            
+        
         var searchBtn = new Button
         {
             Content = "🔍 Search (Ctrl+Shift+F)",
             Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Foreground = Brushes.White,
             Margin = new Thickness(5, 0),
-            Padding = new Thickness(10, 5)
+            Padding = new Thickness(6, 3)
         };
         searchBtn.Click += (_, _) => OnSearchRequested?.Invoke();
         stack.Children.Add(searchBtn);
@@ -124,7 +124,7 @@ public class RunDebugToolbar : UserControl
         {
             ItemsSource = new List<string> { "Debug", "Release" },
             SelectedIndex = 0,
-            Height = 30,
+            //Height = 30,
             VerticalAlignment = VerticalAlignment.Center
         };
 
@@ -151,14 +151,14 @@ public class RunDebugToolbar : UserControl
             Content = new TextBlock
             {
                 Text = icon,
-                FontSize = 16,
+                FontSize = 10,
                 Foreground = color,
                 FontWeight = FontWeight.Bold
             },
             Background = Brushes.Transparent,
             BorderThickness = new Thickness(0),
-            Padding = new Thickness(8, 4),
-            CornerRadius = new CornerRadius(4)
+            //Padding = new Thickness(6, 3),
+            //CornerRadius = new CornerRadius(3)
         };
 
         ToolTip.SetTip(btn, tooltip);

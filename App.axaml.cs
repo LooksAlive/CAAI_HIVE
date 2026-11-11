@@ -200,14 +200,14 @@ public class MainWindow : Window
         TabStripPlacement = Dock.Top
     };
     private DockPanel _sideTabs = null!;
-    private readonly CodeStructureWidget _structureTree = new();
+    private CodeStructureWidget _structureTree = new();
     private FileExplorerWidget _filesTreeView = null!;
     private readonly ObjectInspectorWidget1 _inspector = new();
     // Inside MainWindow class
     private AdhocWorkspace _workspace = null!;
     private ProjectId _projectId = null!;
-    private readonly RunDebugToolbar _toolbar = new();
-    private readonly DiagnosticsPanel _diagnosticsPanel = new();
+    private RunDebugToolbar _toolbar = new();
+    private DiagnosticsPanel _diagnosticsPanel = new();
     private NuGetPackageManager _nuGetPackageManager = null!;
     private TabControl _outputTabs = null!;
     private Grid _mainGrid = null!;
@@ -216,17 +216,17 @@ public class MainWindow : Window
     private GridLength _outputHeight = new(250);
     private readonly Dictionary<DocumentId, List<Diagnostic>> _documentDiagnostics = new();
     private readonly Dictionary<DocumentId, CancellationTokenSource> _diagnosticRequests = new();
-    private readonly TextBlock _statusFile = new() { TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock _statusDiagnostics = new() { Width = 160, TextAlignment = TextAlignment.Right };
-    private readonly TextBlock _statusPosition = new() { Width = 220, TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly TextBlock _statusMode = new() { Width = 140, TextAlignment = TextAlignment.Right };
+    private TextBlock _statusFile = new() { TextTrimming = TextTrimming.CharacterEllipsis };
+    private TextBlock _statusDiagnostics = new() { Width = 160, TextAlignment = TextAlignment.Right };
+    private TextBlock _statusPosition = new() { Width = 220, TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
+    private TextBlock _statusMode = new() { Width = 140, TextAlignment = TextAlignment.Right };
     private TextEditor? _statusEditor;
     private TabItem _nuGetTab = null!;
     private TerminalWidget _terminal = null!;
-    private readonly MainMenuWidget _menu = new();
-    private TreeView _hierarchyTree;
+    private MainMenuWidget _menu = new();
+    private TreeView _hierarchyTree = null!;
     private EnvironmentWidget _env = null!;
-    private readonly AstViewer _astViewer = new();
+    private AstViewer _astViewer = new();
     private DotnetRunner _runner;
     private readonly WindowNotificationManager _notificationManager = new WindowNotificationManager()
     {
@@ -238,7 +238,9 @@ public class MainWindow : Window
     SyntaxTree? currentSyntaxTree = null;
 
     private static string _baseDir = "C:\\Users\\A200542365\\OneDrive - Deutsche Telekom AG\\Desktop\\CAAI_HIVE";
-    public CodeWatcher CodeWatcher = new CodeWatcher(_baseDir, file =>
+    public CodeWatcher? CodeWatcher = Environment.GetEnvironmentVariable("DOTNET_WATCH") == "1"
+        ? null
+        : new CodeWatcher(_baseDir, file =>
     {
         Console.WriteLine($"Changed: {file}");
 
@@ -700,10 +702,6 @@ public class MainWindow : Window
         };
         ConfigureTabStrip(_outputTabs);
 
-        _nuGetPackageManager = new NuGetPackageManager(_notificationManager, _baseDir);
-        _terminal = new TerminalWidget(_baseDir);
-        _nuGetPackageManager.OutputAppended += (_, message) => _terminal.AppendOutput(message + Environment.NewLine);
-
         _outputTabs.Items.Add(new TabItem { Header = "⚠️ Diagnostics", Content = _diagnosticsPanel });
         _outputTabs.Items.Add(new TabItem { Header = "👨‍💻 Terminal", Content = _terminal });
         _nuGetTab = new TabItem { Header = "📦 NuGet", Content = _nuGetPackageManager };
@@ -767,9 +765,23 @@ public class MainWindow : Window
     // Update your MainWindow constructor to use the new layout
     public MainWindow()
     {
+        Title = "CAAI IDE";
+        Width = 1200;
+        Height = 800;
+        ConfigureTabStrip(_tabs);
+        InitializeRoslyn();
+        SetupLiveDiagnostics();
+        _terminal = new TerminalWidget(_baseDir);
+        _nuGetPackageManager = new NuGetPackageManager(_notificationManager, _baseDir);
+        _nuGetPackageManager.OutputAppended += (_, message) => _terminal.AppendOutput(message + Environment.NewLine);
+        _runner = new DotnetRunner(_terminal);
+        KeyDown += Window_KeyDown;
+        AddHandler(KeyDownEvent, OnGlobalKeyDown, RoutingStrategies.Tunnel);
         var root = new HotReloadRoot(BuildUI);
         Content = root;
         HotReloadService.Register(root);
+        currentSyntaxTree = OpenFile(Path.Combine(_baseDir, "Program.cs"));
+        SetupStructureTreeContent();
         _tabs.SelectionChanged += OnEditorTabSelectionChanged;
         _tabs.GotFocus += OnEditorGotFocus;
         SettingsData.Instance.SettingsChanged += OnStatusSettingsChanged;
@@ -885,15 +897,84 @@ public class MainWindow : Window
 
     private Control BuildUI()
     {
-        Title = "CAAI IDE";
-        Width = 1200;
-        Height = 800;
-        ConfigureTabStrip(_tabs);
+        var previous = (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
+            _statusFile, _statusDiagnostics, _statusPosition, _statusMode,
+            _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
+            _outputSplitter, _nuGetTab, _hierarchyTree, _env);
+        var restoreControls = new Stack<Action>();
+        var outputVisible = _outputDock?.IsVisible ?? true;
+        var outputHeight = _mainGrid?.RowDefinitions[2].Height ?? _outputHeight;
+        try
+        {
+            foreach (var control in new Control[] { _tabs, _inspector, _terminal, _nuGetPackageManager })
+                restoreControls.Push(DetachForRebuild(control));
 
-        InitializeRoslyn();
-        SetupLiveDiagnostics();
+            _menu = new MainMenuWidget();
+            _toolbar = new RunDebugToolbar();
+            _structureTree = new CodeStructureWidget();
+            _diagnosticsPanel = new DiagnosticsPanel();
+            _astViewer = new AstViewer();
+            _statusFile = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis };
+            _statusDiagnostics = new TextBlock { Width = 160, TextAlignment = TextAlignment.Right };
+            _statusPosition = new TextBlock { Width = 220, TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
+            _statusMode = new TextBlock { Width = 140, TextAlignment = TextAlignment.Right };
 
-        _runner = new DotnetRunner(_terminal);
+            var layout = BuildLayout();
+            _mainGrid!.RowDefinitions[2].Height = outputHeight;
+            _outputDock!.IsVisible = outputVisible;
+            _outputSplitter.IsVisible = outputVisible;
+            _menu.SetOutputVisible(outputVisible);
+            _diagnosticsPanel.SetDiagnostics(_documentDiagnostics.Values.SelectMany(items => items).Select(Convert));
+            UpdateStatusBar();
+            return layout;
+        }
+        catch
+        {
+            (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
+                _statusFile, _statusDiagnostics, _statusPosition, _statusMode,
+                _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
+                _outputSplitter, _nuGetTab, _hierarchyTree, _env) = previous;
+            while (restoreControls.TryPop(out var restore))
+                restore();
+            throw;
+        }
+    }
+
+    private static Action DetachForRebuild(Control control)
+    {
+        switch (control.Parent)
+        {
+            case Panel panel:
+                var index = panel.Children.IndexOf(control);
+                panel.Children.Remove(control);
+                return () =>
+                {
+                    DetachForRebuild(control);
+                    panel.Children.Insert(index, control);
+                };
+            case ContentControl contentControl:
+                contentControl.Content = null;
+                return () =>
+                {
+                    DetachForRebuild(control);
+                    contentControl.Content = control;
+                };
+            case Decorator decorator:
+                decorator.Child = null;
+                return () =>
+                {
+                    DetachForRebuild(control);
+                    decorator.Child = control;
+                };
+            case null:
+                return () => { DetachForRebuild(control); };
+            default:
+                throw new InvalidOperationException($"Cannot transfer {control.GetType().Name} from {control.Parent.GetType().Name}.");
+        }
+    }
+
+    private Control BuildLayout()
+    {
 
         // Setup toolbar events
         _toolbar.OnRunRequested += () => _runner.Run(_baseDir);
@@ -924,13 +1005,6 @@ public class MainWindow : Window
             ),
             ItemsSource = BuildClassHierarchy()
         };
-
-        // Setup keyboard handling
-        this.KeyDown += Window_KeyDown;
-
-        // Open initial file
-        //_structureTree._treeView.ItemsSource = OpenFile("/home/adam/Desktop/HIVE/Program.cs");
-        currentSyntaxTree = OpenFile(_baseDir + "\\Program.cs");
 
         SetupEnvironment();
         SetupStructureTree();
@@ -1396,9 +1470,14 @@ public class MainWindow : Window
             activeEditor.Focus();
         };
 
+        SetupStructureTreeContent();
+    }
+
+    private void SetupStructureTreeContent()
+    {
         if (currentSyntaxTree != null)
         {
-            _structureTree.SetStructure(currentSyntaxTree, "/home/adam/Desktop/HIVE/Program.cs");
+            _structureTree.SetStructure(currentSyntaxTree, currentSyntaxTree.FilePath);
         }
     }
 
@@ -1450,9 +1529,6 @@ public class MainWindow : Window
 
     private void WireEvents(string baseDir)
     {
-        // 5. Global Keyboard Shortcuts
-        AddHandler(KeyDownEvent, OnGlobalKeyDown, RoutingStrategies.Tunnel);
-
         _diagnosticsPanel.OnDiagnosticClicked += (diag) =>
         {
             OpenFileAtLine(diag.FilePath, diag.Line - 1, diag.Column - 1);
