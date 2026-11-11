@@ -1218,43 +1218,6 @@ message
     }
 }
 
-public class ObjectInspectorWidget1 : UserControl
+public class ObjectInspectorWidget1 : ObjectInspectorWidget
 {
-    private TreeView _treeView;
-    private ObservableCollection<TreeViewItem> _items = new();
-
-    public ObjectInspectorWidget1()
-    {
-        _treeView = new TreeView
-        {
-            Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
-            Foreground = Brushes.White,
-            ItemsSource = _items
-        };
-        Content = _treeView;
-    }
-
-    public void Inspect(string name, object? value)
-    {
-        var item = new TreeViewItem { Header = $"{name}: {value?.ToString() ?? "null"}" };
-        _items.Add(item);
-    }
-
-    public void UpdateVariables(IEnumerable<ScriptVariable> variables)
-    {
-        _items.Clear();
-        foreach (var variable in variables)
-        {
-            var item = new TreeViewItem 
-            { 
-                Header = $"{variable.Name} ({variable.Type.Name}) = {variable.Value?.ToString() ?? "null"}" 
-            };
-            _items.Add(item);
-        }
-    }
-
-    public void Clear()
-    {
-        _items.Clear();
-    }
 }
