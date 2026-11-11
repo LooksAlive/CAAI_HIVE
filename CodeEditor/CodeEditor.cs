@@ -59,6 +59,7 @@ public class CodeEditor : UserControl
     private bool _isUpdating;
     public event EventHandler<string>? TextChanged;
     public event EventHandler? Saved;
+    public event EventHandler? SaveRequested;
     private BreadcrumbBar _breadcrumbBar = new();
     
     public event EventHandler<GoToDefinitionEventArgs>? GoToDefinitionRequested;
@@ -132,6 +133,11 @@ public class CodeEditor : UserControl
         _editor.TextChanged -= OnTextChanged;
         var solution = _workspace.CurrentSolution.RemoveDocument(_documentId);
         _workspace.TryApplyChanges(solution);
+    }
+
+    internal void RebindWorkspace(AdhocWorkspace workspace)
+    {
+        _workspace = workspace;
     }
 
     public CodeEditor(string filePath, AdhocWorkspace workspace, DocumentId docId, string code)
@@ -435,6 +441,12 @@ public class CodeEditor : UserControl
 
     private void Save()
     {
+        if (string.IsNullOrEmpty(FilePath))
+        {
+            SaveRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         try
         {
             File.WriteAllText(FilePath, _editor.Text);
@@ -532,9 +544,7 @@ public class CodeEditor : UserControl
             // Update editor
             Dispatcher.UIThread.Post(() =>
             {
-                _isUpdating = true;
-                _editor.Text = formattedText.ToString();
-                _isUpdating = false;
+                _editor.Document.Replace(0, _editor.Document.TextLength, formattedText.ToString());
             });
         }
         catch (Exception ex)
