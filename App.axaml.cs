@@ -111,7 +111,8 @@ public sealed class App : Application
 
 public static class DialogHelper
 {
-    public static async Task<ISymbol?> ShowSymbolSearchDialog(Window parent, AdhocWorkspace workspace)
+    public static async Task<ISymbol?> ShowSymbolSearchDialog(Window parent, AdhocWorkspace workspace,
+        Action<GoToDefinitionEventArgs>? navigateToLocation = null)
     {
         var searchWidget = new SymbolSearchWidget(workspace, parent);
 
@@ -148,6 +149,17 @@ public static class DialogHelper
             tcs.TrySetResult(symbol);
             dialog.Close();
         };
+
+        searchWidget.OnGoToDefinitionRequested += (_, location) =>
+        {
+            if (navigateToLocation == null) return;
+            tcs.TrySetResult(null);
+            dialog.Close();
+            navigateToLocation(location);
+        };
+
+        dialog.Opened += (_, _) => searchWidget.FocusInput();
+        dialog.Closed += (_, _) => tcs.TrySetResult(null);
 
         searchWidget.OnCancel += () =>
         {
@@ -534,7 +546,8 @@ public class MainWindow : Window
 
     private async void ShowSearchDialog()
     {
-        var symbol = await DialogHelper.ShowSymbolSearchDialog(this, _workspace);
+        var symbol = await DialogHelper.ShowSymbolSearchDialog(this, _workspace,
+            location => OpenFileAtLine(location.FilePath, location.Line, location.Column));
         if (symbol != null)
         {
             // Navigate to the symbol
@@ -1333,7 +1346,7 @@ public class MainWindow : Window
                 var line = lineSpan.StartLinePosition.Line;
 
                 // Open the file and navigate to the line
-                OpenFileAtLine(filePath, line);
+                OpenFileAtLine(filePath, line, lineSpan.StartLinePosition.Character);
                 break;
             }
         }
