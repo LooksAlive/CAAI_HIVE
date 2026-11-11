@@ -10,6 +10,7 @@ using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Folding;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.Text;
 using AvaloniaEdit.Editing;
@@ -377,6 +378,9 @@ public class CodeEditor : UserControl
         // Separator
         var separator2 = new Separator();
 
+        var quickActionsItem = new MenuItem { Header = "Quick Actions (Ctrl+.)" };
+        quickActionsItem.Click += async (_, _) => await ShowQuickActionsAsync();
+
         // Format Document
         var formatItem = new MenuItem { Header = "Format Document" };
         formatItem.Click += (_, _) => FormatDocument();
@@ -403,6 +407,7 @@ public class CodeEditor : UserControl
         contextMenu.Items.Add(goToDefinitionItem);
         contextMenu.Items.Add(findReferencesItem);
         contextMenu.Items.Add(separator2);
+        contextMenu.Items.Add(quickActionsItem);
         contextMenu.Items.Add(formatItem);
         contextMenu.Items.Add(formatSelectionItem);
         contextMenu.Items.Add(separator3);
@@ -738,11 +743,93 @@ public class CodeEditor : UserControl
 
     private void Editor_PreviewKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.OemPeriod && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            _ = ShowQuickActionsAsync();
+            return;
+        }
+
         if (e.Key != Key.Space || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
             return;
 
         e.Handled = true;
         _ = ShowCompletionsAsync(null, CompletionTrigger.Invoke);
+    }
+
+    private async Task ShowQuickActionsAsync()
+    {
+        var document = _workspace.CurrentSolution.GetDocument(_documentId);
+        if (document is null)
+            return;
+
+        var snapshot = _editor.Text ?? "";
+        var caretOffset = _editor.CaretOffset;
+        document = document.WithText(SourceText.From(snapshot));
+
+        try
+        {
+            _completionWindow?.Close();
+            var actions = await QuickActions.GetActionsAsync(document, caretOffset, CancellationToken.None);
+            if ((_editor.Text ?? "") != snapshot || _editor.CaretOffset != caretOffset || this.GetVisualRoot() is null)
+                return;
+
+            var menu = new ContextMenu();
+            if (actions.Count == 0)
+            {
+                menu.Items.Add(new MenuItem { Header = "No quick actions available", IsEnabled = false });
+            }
+            else
+            {
+                foreach (var action in actions)
+                {
+                    var item = new MenuItem { Header = action.Title };
+                    item.Click += async (_, _) => await ApplyQuickActionAsync(action, document, snapshot);
+                    menu.Items.Add(item);
+                }
+            }
+
+            menu.Open(_editor);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Quick actions failed: {ex.Message}");
+            var menu = new ContextMenu();
+            menu.Items.Add(new MenuItem { Header = "Could not load quick actions", IsEnabled = false });
+            menu.Open(_editor);
+        }
+    }
+
+    private async Task ApplyQuickActionAsync(CodeAction action, Document originalDocument, string snapshot)
+    {
+        try
+        {
+            var operations = await action.GetOperationsAsync(CancellationToken.None);
+            var changedDocument = operations.OfType<ApplyChangesOperation>()
+                .SingleOrDefault()?.ChangedSolution.GetDocument(_documentId);
+            if (changedDocument is null || (_editor.Text ?? "") != snapshot)
+                return;
+
+            var changes = await changedDocument.GetTextChangesAsync(originalDocument);
+            if ((_editor.Text ?? "") != snapshot)
+                return;
+
+            _editor.Document.BeginUpdate();
+            try
+            {
+                foreach (var change in changes.OrderByDescending(change => change.Span.Start))
+                    _editor.Document.Replace(change.Span.Start, change.Span.Length, change.NewText ?? "");
+            }
+            finally
+            {
+                _editor.Document.EndUpdate();
+            }
+            _editor.Focus();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Quick action failed: {ex.Message}");
+        }
     }
 
     private async Task ShowCompletionsAsync(string? inputText, CompletionTrigger trigger)

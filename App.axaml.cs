@@ -301,14 +301,11 @@ public class MainWindow : Window
 
 		// 2. Add Project
 		var solution = _workspace.CurrentSolution.AddProject(projectInfo);
-		/*
-        // 3. Add References to that Solution snapshot
         var references = GetDefaultReferences();
         foreach (var res in references)
         {
             solution = solution.AddMetadataReference(_projectId, res);
         }
-        */
 		// 4. Apply everything back to the Workspace
 		if (/*_workspace.CanApplyChange(ApplyChangesKind.) && */!_workspace.TryApplyChanges(solution))
 		{
@@ -366,7 +363,7 @@ public class MainWindow : Window
 
 		// AddDocument returns the NEW document. We grab its ID.
 		var doc = _workspace.AddDocument(_projectId, name, sourceText);
-		_workspace.TryApplyChanges(_workspace.CurrentSolution);
+		_workspace.TryApplyChanges(_workspace.CurrentSolution.WithDocumentFilePath(doc.Id, Path.GetFullPath(filePath)));
 
 		return doc.Id;
 	}
