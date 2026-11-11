@@ -189,14 +189,13 @@ public class CodeEditor : UserControl
         rootGrid.Children.Add(_breadcrumbBar);
         rootGrid.Children.Add(_editor);
 
-        // settings
-        SettingsData.Instance.SettingsChanged += (_, _) =>
+        AttachedToVisualTree += (_, _) =>
         {
-            var inst = SettingsData.Instance;
-            _editor.FontFamily = inst.FontFamily;
-            _editor.FontSize = inst.FontSize;
-            // ...
+            SettingsData.Instance.SettingsChanged += OnSettingsChanged;
+            ApplyEditorSettings();
         };
+        DetachedFromVisualTree += (_, _) => SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
+        ApplyEditorSettings();
 
         // 5. Nastavenie Gridu ako hlavný obsah widgetu
         Content = rootGrid;
@@ -221,6 +220,23 @@ public class CodeEditor : UserControl
         _editor.TextArea.SelectionBrush = _selectionBrush;
         _editor.TextArea.SelectionForeground = null;
         _editor.TextArea.SelectionBorder = null;
+    }
+
+    private void OnSettingsChanged(object? sender, EventArgs e) => ApplyEditorSettings();
+
+    private void ApplyEditorSettings()
+    {
+        var settings = SettingsData.Instance;
+        _editor.FontFamily = new FontFamily(settings.FontFamily);
+        _editor.FontSize = settings.FontSize;
+        _editor.ShowLineNumbers = settings.ShowLineNumbers;
+        _editor.WordWrap = settings.WordWrap;
+        _editor.Options.IndentationSize = settings.IndentationSize;
+        _editor.Options.ConvertTabsToSpaces = settings.ConvertTabsToSpaces;
+        if (Color.TryParse(settings.EditorBackground, out var background))
+            _editor.Background = new SolidColorBrush(background);
+        if (Color.TryParse(settings.EditorForeground, out var foreground))
+            _editor.Foreground = new SolidColorBrush(foreground);
     }
 
     private void SetupEventHandlers()

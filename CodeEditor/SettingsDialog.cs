@@ -109,6 +109,7 @@ public class SettingsDialog : Window
     private SettingsData _settings;
     private TabControl _tabControl = null!;
     private readonly string _settingsPath;
+    private TextBlock _statusText = null!;
 
     public SettingsDialog(SettingsData settings, string settingsPath)
     {
@@ -125,6 +126,7 @@ public class SettingsDialog : Window
         
         BuildUI();
         LoadSettings();
+        DisableUnavailableSettings();
         
         // Keyboard shortcuts
         KeyDown += (_, e) =>
@@ -140,7 +142,7 @@ public class SettingsDialog : Window
     {
         var mainGrid = new Grid
         {
-            RowDefinitions = new RowDefinitions("*, Auto"),
+            RowDefinitions = new RowDefinitions("*, Auto, Auto"),
             Margin = new Thickness(0)
         };
 
@@ -162,17 +164,27 @@ public class SettingsDialog : Window
         mainGrid.Children.Add(_tabControl);
         Grid.SetRow(_tabControl, 0);
 
+        _statusText = new TextBlock
+        {
+            Foreground = Brushes.OrangeRed,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(12, 4),
+            IsVisible = false
+        };
+        mainGrid.Children.Add(_statusText);
+        Grid.SetRow(_statusText, 1);
+
         // Button panel
         var buttonPanel = CreateButtonPanel();
         mainGrid.Children.Add(buttonPanel);
-        Grid.SetRow(buttonPanel, 1);
+        Grid.SetRow(buttonPanel, 2);
 
         Content = mainGrid;
     }
 
     private TabItem CreateEditorTab()
     {
-        var panel = new StackPanel { Spacing = 15, Margin = new Thickness(10) };
+        var panel = new StackPanel { Spacing = 9, Margin = new Thickness(12) };
 
         // Font Family
         var fontPanel = CreateSettingRow("Font Family:", 
@@ -202,7 +214,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var lineNumbersToggle);
 
         // Word Wrap
@@ -211,7 +223,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var wordWrapToggle);
 
         // Indentation Size
@@ -232,7 +244,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var tabsToggle);
 
         panel.Children.Add(fontPanel);
@@ -262,7 +274,7 @@ public class SettingsDialog : Window
 
     private TabItem CreateAppearanceTab()
     {
-        var panel = new StackPanel { Spacing = 15, Margin = new Thickness(10) };
+        var panel = new StackPanel { Spacing = 9, Margin = new Thickness(12) };
 
         // Theme
         var themePanel = CreateSettingRow("Theme:", 
@@ -295,8 +307,8 @@ public class SettingsDialog : Window
         {
             Background = new SolidColorBrush(Color.FromRgb(40, 40, 45)),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(15),
-            Margin = new Thickness(0, 10, 0, 0),
+            Padding = new Thickness(10),
+            Margin = new Thickness(0, 6, 0, 0),
             Child = new TextBlock
             {
                 Text = "Code Preview\n  public class Example\n  {\n      private string _name;\n  }",
@@ -305,6 +317,21 @@ public class SettingsDialog : Window
                 Foreground = Brushes.White,
                 FontWeight = FontWeight.Normal
             }
+        };
+
+        void UpdatePreview()
+        {
+            previewBorder.Background = new SolidColorBrush(((ColorPicker)bgPicker).Color);
+            if (previewBorder.Child is TextBlock text)
+                text.Foreground = new SolidColorBrush(((ColorPicker)fgPicker).Color);
+        }
+        bgPicker.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == ColorPicker.ColorProperty) UpdatePreview();
+        };
+        fgPicker.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == ColorPicker.ColorProperty) UpdatePreview();
         };
 
         panel.Children.Add(themePanel);
@@ -329,7 +356,7 @@ public class SettingsDialog : Window
 
     private TabItem CreateBuildTab()
     {
-        var panel = new StackPanel { Spacing = 15, Margin = new Thickness(10) };
+        var panel = new StackPanel { Spacing = 9, Margin = new Thickness(12) };
 
         // Build Output Path with Browse
         var browsePanel = new StackPanel
@@ -392,7 +419,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var errorsToggle);
 
         // Auto Build on Save
@@ -401,7 +428,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var autoBuildToggle);
 
         panel.Children.Add(errorsPanel);
@@ -424,7 +451,7 @@ public class SettingsDialog : Window
 
     private TabItem CreateNotebookTab()
     {
-        var panel = new StackPanel { Spacing = 15, Margin = new Thickness(10) };
+        var panel = new StackPanel { Spacing = 9, Margin = new Thickness(12) };
 
         // Default Path with Browse
         var browsePanel = new StackPanel
@@ -486,7 +513,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var autoRunToggle);
 
         panel.Children.Add(autoRunPanel);
@@ -506,7 +533,7 @@ public class SettingsDialog : Window
     
     private TabItem CreateGeneralTab()
     {
-        var panel = new StackPanel { Spacing = 15, Margin = new Thickness(10) };
+        var panel = new StackPanel { Spacing = 9, Margin = new Thickness(12) };
 
         // Language
         var langPanel = CreateSettingRow("Language:", 
@@ -524,7 +551,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var updatesToggle);
 
         // Send Telemetry
@@ -533,7 +560,7 @@ public class SettingsDialog : Window
             {
                 OffContent = "Off",
                 OnContent = "On",
-                Background = new SolidColorBrush(Color.FromRgb(45, 45, 50))
+                Background = Brushes.Transparent
             }, out var telemetryToggle);
 
         // Clear Recent Projects
@@ -612,30 +639,30 @@ public class SettingsDialog : Window
 
         var saveBtn = new Button
         {
-            Content = "💾 Save",
-            Background = new SolidColorBrush(Color.FromRgb(0, 120, 0)),
+            Content = "Save",
+            Background = new SolidColorBrush(Color.FromRgb(28, 112, 93)),
             Foreground = Brushes.White,
-            Padding = new Thickness(20, 8),
+            Padding = new Thickness(14, 6),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         saveBtn.Click += (_, _) => SaveSettings();
 
         var resetBtn = new Button
         {
-            Content = "🔄 Reset to Default",
-            Background = new SolidColorBrush(Color.FromRgb(100, 100, 0)),
+            Content = "Reset to Default",
+            Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Foreground = Brushes.White,
-            Padding = new Thickness(20, 8),
+            Padding = new Thickness(14, 6),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
-        resetBtn.Click += (_, _) => SettingsData.Instance.RestoreDefaults();
+        resetBtn.Click += (_, _) => PopulateControls(new SettingsData());
 
         var cancelBtn = new Button
         {
             Content = "Cancel",
-            Background = new SolidColorBrush(Color.FromRgb(100, 0, 0)),
+            Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Foreground = Brushes.White,
-            Padding = new Thickness(20, 8),
+            Padding = new Thickness(14, 6),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         cancelBtn.Click += (_, _) => Close();
@@ -649,14 +676,82 @@ public class SettingsDialog : Window
 
     private void LoadSettings()
     {
-        SettingsData.Instance.Load(_settingsPath);
-        SettingsData.Instance.ApplySettings();
+        PopulateControls(_settings);
     }
 
     private void SaveSettings()
     {
-        SettingsData.Instance.ApplySettings();
-        SettingsData.Instance.Save(_settingsPath);
+        var editor = GetControls(0);
+        var appearance = GetControls(1);
+        var updated = new SettingsData();
+        updated.CopyFrom(_settings);
+        updated.FontFamily = ((ComboBox)editor["FontCombo"]).SelectedItem as string ?? updated.FontFamily;
+        updated.FontSize = (double)(((NumericUpDown)editor["SizeUpDown"]).Value ?? (decimal)updated.FontSize);
+        updated.ShowLineNumbers = ((ToggleSwitch)editor["LineNumbersToggle"]).IsChecked == true;
+        updated.WordWrap = ((ToggleSwitch)editor["WordWrapToggle"]).IsChecked == true;
+        updated.IndentationSize = (int)(((NumericUpDown)editor["IndentUpDown"]).Value ?? updated.IndentationSize);
+        updated.ConvertTabsToSpaces = ((ToggleSwitch)editor["TabsToggle"]).IsChecked == true;
+        updated.EditorBackground = ((ColorPicker)appearance["BgPicker"]).Color.ToString();
+        updated.EditorForeground = ((ColorPicker)appearance["FgPicker"]).Color.ToString();
+
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(_settingsPath));
+            if (directory is not null)
+                Directory.CreateDirectory(directory);
+            updated.Save(_settingsPath);
+            _settings.CopyFrom(updated);
+            _settings.ApplySettings();
+            Close(true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _statusText.Text = $"Could not save settings: {ex.Message}";
+            _statusText.IsVisible = true;
+        }
+    }
+
+    private Dictionary<string, object> GetControls(int index) =>
+        (Dictionary<string, object>)((StackPanel)((ScrollViewer)((TabItem)_tabControl.Items[index]!).Content!).Content!).Tag!;
+
+    private void DisableUnavailableSettings()
+    {
+        var theme = (Control)GetControls(1)["ThemeCombo"];
+        theme.IsEnabled = false;
+        ToolTip.SetTip(theme, "Application theme switching is not available yet.");
+        for (var index = 2; index < _tabControl.Items.Count; index++)
+        {
+            var tab = (TabItem)_tabControl.Items[index]!;
+            tab.Header = $"{tab.Header} (unavailable)";
+            tab.IsEnabled = false;
+            ToolTip.SetTip(tab, "These settings are not available yet.");
+        }
+    }
+
+    private void PopulateControls(SettingsData settings)
+    {
+        var editor = GetControls(0);
+        var appearance = GetControls(1);
+        var build = GetControls(2);
+        var notebook = GetControls(3);
+        var general = GetControls(4);
+        ((ComboBox)editor["FontCombo"]).SelectedItem = settings.FontFamily;
+        ((NumericUpDown)editor["SizeUpDown"]).Value = (decimal)settings.FontSize;
+        ((ToggleSwitch)editor["LineNumbersToggle"]).IsChecked = settings.ShowLineNumbers;
+        ((ToggleSwitch)editor["WordWrapToggle"]).IsChecked = settings.WordWrap;
+        ((NumericUpDown)editor["IndentUpDown"]).Value = settings.IndentationSize;
+        ((ToggleSwitch)editor["TabsToggle"]).IsChecked = settings.ConvertTabsToSpaces;
+        ((ComboBox)appearance["ThemeCombo"]).SelectedItem = settings.Theme;
+        ((ColorPicker)appearance["BgPicker"]).Color = Color.TryParse(settings.EditorBackground, out var background) ? background : Colors.Black;
+        ((ColorPicker)appearance["FgPicker"]).Color = Color.TryParse(settings.EditorForeground, out var foreground) ? foreground : Colors.White;
+        ((TextBox)build["PathBox"]).Text = settings.BuildOutputPath;
+        ((ToggleSwitch)build["ErrorsToggle"]).IsChecked = settings.ShowBuildErrors;
+        ((ToggleSwitch)build["AutoBuildToggle"]).IsChecked = settings.AutoBuildOnSave;
+        ((TextBox)notebook["PathBox"]).Text = settings.NotebookDefaultPath;
+        ((ToggleSwitch)notebook["AutoRunToggle"]).IsChecked = settings.AutoRunCells;
+        ((ComboBox)general["LangCombo"]).SelectedItem = settings.Language;
+        ((ToggleSwitch)general["UpdatesToggle"]).IsChecked = settings.CheckForUpdates;
+        ((ToggleSwitch)general["TelemetryToggle"]).IsChecked = settings.SendTelemetry;
     }
 }
 
@@ -667,9 +762,6 @@ public static class SettingsExtensions
     {
         var dialog = new SettingsDialog(settings, settingsPath);
         var result = await dialog.ShowDialog<bool?>(parent);
-        //return dialog.SettingsChanged != null ? settings : null;
-        // on close invoke all settings changed
-        //dialog.RaiseSettingsChanged(settings);
-        return settings;
+        return result == true ? settings : null;
     }
 }

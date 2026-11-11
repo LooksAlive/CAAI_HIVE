@@ -28,11 +28,23 @@ namespace CAAI;
 
 public sealed class App : Application
 {
+	public static readonly string SettingsPath = Path.Combine(
+		Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YourApp", "settings.json");
+
 	public override void Initialize()
 	{
 		//AvaloniaXamlLoader.Load(this);
 		//Styles.Add(new SimpleTheme());
 		Styles.Add(new FluentTheme());
+		/*
+		Styles.Add(new Style(selector => selector.OfType<Button>())
+		{
+			Setters =
+			{
+				new Setter(TemplatedControl.FontSizeProperty, 6.0),
+				new Setter(TemplatedControl.PaddingProperty, new Thickness(4, 2))
+			}
+		});*/
 
 		//var semiTheme = new SemiTheme();
 		//Styles.Add(semiTheme);
@@ -61,6 +73,7 @@ public sealed class App : Application
 	{
 		if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
 		{
+			SettingsData.Instance.CopyFrom(SettingsData.Instance.Load(SettingsPath));
 			desktop.MainWindow = new MainWindow();
 #if DEBUG
 			desktop.MainWindow.AttachDevTools();
@@ -593,7 +606,7 @@ public class MainWindow : Window
 		{
 			ItemsSource = views.Keys.ToList(),
 			SelectedIndex = 0,
-			Margin = new Thickness(4)
+			Margin = new Thickness(2)
 		};
 
 		var content = new ContentControl
@@ -641,7 +654,7 @@ public class MainWindow : Window
 		// Bottom splitter (between editors and output)
 		var bottomSplitter = new GridSplitter
 		{
-			Height = 4,
+			Height = 2,
 			Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
 			ResizeBehavior = GridResizeBehavior.PreviousAndNext,
 			VerticalAlignment = VerticalAlignment.Stretch
@@ -1093,14 +1106,7 @@ public class MainWindow : Window
 
     private async Task ShowSettings()
     {
-        var settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "YourApp", "settings.json");
-        
-        // Ensure directory exists
-        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-        
-        // Load existing settings or create default
-        //var settings = SettingsData.Instance.Load(settingsPath);
-        var dialog = new SettingsDialog(SettingsData.Instance, settingsPath);
+		var dialog = new SettingsDialog(SettingsData.Instance, App.SettingsPath);
         await dialog.ShowDialog(this);
     }
 
