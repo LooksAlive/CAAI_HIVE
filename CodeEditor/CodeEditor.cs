@@ -251,7 +251,7 @@ public class CodeEditor : UserControl
         _editor.AddHandler(InputElement.KeyDownEvent, Editor_PreviewKeyDown, RoutingStrategies.Tunnel);
 
         // Ctrl+Click for Go to Definition
-        _editor.TextArea.TextView.PointerPressed += Editor_PointerPressed;
+        _editor.AddHandler(InputElement.PointerPressedEvent, Editor_PointerPressed, RoutingStrategies.Tunnel);
 
         // Tooltip with delay and proper positioning
         _editor.TextArea.TextView.PointerMoved += TextView_PointerMoved;
@@ -267,28 +267,25 @@ public class CodeEditor : UserControl
         }
     }
     
-    private async void Editor_PointerPressed(object? sender, PointerPressedEventArgs e)
+    private void Editor_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        // Check for Ctrl+Click
-        var keyModifiers = e.KeyModifiers;
-        if (keyModifiers.HasFlag(KeyModifiers.Control))
+        var textView = _editor.TextArea.TextView;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+            e.GetCurrentPoint(textView).Properties.IsLeftButtonPressed)
         {
-            var textView = _editor.TextArea.TextView;
             var position = e.GetPosition(textView);
-            var tvp = textView.GetPosition(position);
+            if (!new Rect(textView.Bounds.Size).Contains(position))
+                return;
+
+            var tvp = textView.GetPositionFloor(position + textView.ScrollOffset);
         
             if (tvp.HasValue)
             {
                 // Set caret position
                 _editor.CaretOffset = _editor.Document.GetOffset(tvp.Value.Line, tvp.Value.Column);
             
-                // Go to definition
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    GoToDefinition();
-                });
-            
                 e.Handled = true;
+                GoToDefinition();
             }
         }
     }
@@ -304,14 +301,20 @@ public class CodeEditor : UserControl
         {
             // Find dialog
             var dialog = new FindReplaceDialog(_editor, false);
-            dialog.Show();
+            if (this.GetVisualRoot() is Window owner)
+                dialog.Show(owner);
+            else
+                dialog.Show();
             e.Handled = true;
         }
         else if (e.Key == Key.H && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             // Replace dialog
             var dialog = new FindReplaceDialog(_editor, true);
-            dialog.Show();
+            if (this.GetVisualRoot() is Window owner)
+                dialog.Show(owner);
+            else
+                dialog.Show();
             e.Handled = true;
         }
         else if (e.Key == Key.G && e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -457,24 +460,8 @@ public class CodeEditor : UserControl
         {
             var document = _workspace.CurrentSolution.GetDocument(_documentId);
             if (document == null) return null;
-
-            var model = await document.GetSemanticModelAsync();
-            var root = await document.GetSyntaxRootAsync();
-            if (root == null || model == null) return null;
-
             var caretOffset = _editor.CaretOffset;
-            var token = root.FindToken(caretOffset);
-            if (token.Parent == null) return null;
-
-            var symbolInfo = model.GetSymbolInfo(token.Parent);
-            var symbol = symbolInfo.Symbol ?? model.GetDeclaredSymbol(token.Parent);
-
-            if (symbol == null && token.Parent.Parent != null)
-            {
-                symbol = model.GetSymbolInfo(token.Parent.Parent).Symbol;
-            }
-
-            return symbol;
+            return await SymbolFinder.FindSymbolAtPositionAsync(document, caretOffset);
         }
         catch
         {
@@ -488,8 +475,8 @@ public class CodeEditor : UserControl
         var symbol = await GetSymbolAtCaret();
         if (symbol == null) return;
 
-        var location = symbol.Locations.FirstOrDefault();
-        if (location == null || !location.IsInSource)
+        var location = symbol.Locations.FirstOrDefault(candidate => candidate.IsInSource);
+        if (location == null)
             return;
 
         var lineSpan = location.GetLineSpan();

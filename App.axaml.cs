@@ -257,6 +257,9 @@ public class MainWindow : Window
 
 		foreach (var filePath in files)
 		{
+			if (_workspace.CurrentSolution.GetDocumentIdsWithFilePath(Path.GetFullPath(filePath)).Any())
+				continue;
+
 			// 2. Read the file content from disk once
 			string code = await File.ReadAllTextAsync(filePath);
 
@@ -265,7 +268,8 @@ public class MainWindow : Window
 
 			// 4. Update the current solution in memory
 			var oldSolution = _workspace.CurrentSolution;
-			var newSolution = oldSolution.AddDocument(docId, Path.GetFileName(filePath), code);
+			var newSolution = oldSolution.AddDocument(docId, Path.GetFileName(filePath), code)
+				.WithDocumentFilePath(docId, Path.GetFullPath(filePath));
 
 			// Apply the change so the workspace "knows" about the file
 			if (_workspace.TryApplyChanges(newSolution))
@@ -357,13 +361,20 @@ public class MainWindow : Window
 
 	private DocumentId RegisterFileInWorkspace(string filePath, string content)
 	{
+		var fullPath = Path.GetFullPath(filePath);
+		var existingId = _workspace.CurrentSolution.GetDocumentIdsWithFilePath(fullPath).FirstOrDefault();
+		if (existingId is not null)
+		{
+			_workspace.TryApplyChanges(_workspace.CurrentSolution.WithDocumentText(existingId, SourceText.From(content)));
+			return existingId;
+		}
 		// You don't create the ID manually; the Workspace gives you the Document
 		var name = Path.GetFileName(filePath);
 		var sourceText = SourceText.From(content);
 
 		// AddDocument returns the NEW document. We grab its ID.
 		var doc = _workspace.AddDocument(_projectId, name, sourceText);
-		_workspace.TryApplyChanges(_workspace.CurrentSolution.WithDocumentFilePath(doc.Id, Path.GetFullPath(filePath)));
+		_workspace.TryApplyChanges(_workspace.CurrentSolution.WithDocumentFilePath(doc.Id, fullPath));
 
 		return doc.Id;
 	}
@@ -1266,6 +1277,10 @@ public class MainWindow : Window
 	{
 		// Case A: The content IS the editor
 		if (content is CodeEditor editor) return editor;
+		if (content is Panel panel)
+			return panel.Children.Select(FindEditorInContent).FirstOrDefault(child => child is not null);
+		if (content is ContentControl contentControl)
+			return FindEditorInContent(contentControl.Content);
 
 		// Case B: The content is a container (like a UserControl or Panel)
 		if (content is Control control)
@@ -1553,68 +1568,15 @@ public class MainWindow : Window
 	{
 	    if (!string.IsNullOrEmpty(e.FilePath) && File.Exists(e.FilePath))
 	    {
-		    OpenFileAtLine(e.FilePath, e.Line + 1);
+		    OpenFileAtLine(e.FilePath, e.Line, e.Column);
 	    }
 	}
 
-	private void OnFindReferencesRequested(object? sender, FindReferencesEventArgs e)
+	private async void OnFindReferencesRequested(object? sender, FindReferencesEventArgs e)
 	{
-	    if (e.References == null || !e.References.Any()) return;
-
-	    // Show references in a dialog or panel
-	    var referencesWindow = new Window
-	    {
-	        Title = $"References to {e.Symbol?.Name}",
-	        Width = 600,
-	        Height = 400,
-	        WindowStartupLocation = WindowStartupLocation.CenterOwner,
-	        Background = new SolidColorBrush(Color.FromRgb(35, 35, 40))
-	    };
-
-	    var listBox = new ListBox
-	    {
-	        Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
-	        Foreground = Brushes.White,
-	        Margin = new Thickness(10)
-	    };
-
-	    foreach (var location in e.References)
-	    {
-	        var lineSpan = location.Location.GetLineSpan();
-	        var displayText = $"{location.Document?.FilePath} - Line {lineSpan.StartLinePosition.Line + 1}";
-	        var item = new ListBoxItem { Content = displayText, Tag = location };
-	        listBox.Items.Add(item);
-	    }
-
-	    listBox.DoubleTapped += (_, _) =>
-	    {
-		    if (listBox.SelectedItem is not ListBoxItem selectedItem ||
-		        selectedItem.Tag is not Location location) return;
-		    var lineSpan = location.GetLineSpan();
-		    var filePath = location.SourceTree?.FilePath;
-		    if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
-		    var editor = OpenFile(filePath);
-		    OpenFileAtLine(filePath, lineSpan.StartLinePosition.Line + 1);
-		    referencesWindow.Close();
-	    };
-
-	    var closeButton = new Button
-	    {
-	        Content = "Close",
-	        HorizontalAlignment = HorizontalAlignment.Center,
-	        Margin = new Thickness(10),
-	        Padding = new Thickness(20, 8),
-	        Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
-	        Foreground = Brushes.White
-	    };
-	    closeButton.Click += (_, _) => referencesWindow.Close();
-
-	    var panel = new StackPanel();
-	    panel.Children.Add(listBox);
-	    panel.Children.Add(closeButton);
-
-	    referencesWindow.Content = panel;
-	    referencesWindow.Show();
+	    var referencesWindow = await ReferencesWindow.CreateAsync(e.Symbol, e.References ?? new List<ReferenceLocation>());
+	    referencesWindow.NavigateRequested += (filePath, line, column) => OpenFileAtLine(filePath, line, column);
+	    referencesWindow.Show(this);
 	}
 
 	private void OnFormatDocumentRequested(object? sender, EventArgs e)
