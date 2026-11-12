@@ -1,70 +1,137 @@
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
-using System.Diagnostics;
 using FluentAvalonia.UI.Controls;
 
 namespace CAAI;
 
-public class DotnetRunner(TerminalWidget outputPanel)
+public sealed class DotnetRunner : IDisposable
 {
+    private readonly TerminalWidget _output;
+    private readonly object _gate = new();
     private Process? _process;
-	
-    public void Build(string projectPath, string configuration = "Debug")
+    private CancellationTokenSource? _cts;
+
+    public event Action? Started;
+    public event Action<int>? Exited;
+
+    public bool IsRunning
     {
-        RunProcess($"build \"{projectPath}\" -c {configuration}");
+        get { lock (_gate) return _process is { HasExited: false }; }
     }
+
+    public DotnetRunner(TerminalWidget outputPanel) => _output = outputPanel;
+
+    public void Build(string projectPath, string configuration = "Debug")
+        => StartDotnet($"build \"{projectPath}\" -c {configuration}", "build");
 
     public void Run(string projectPath, string configuration = "Debug")
-    {
-        RunProcess($"run --project \"{projectPath}\" -c {configuration}");
-    }
+        => StartDotnet($"run --project \"{projectPath}\" -c {configuration} --no-build", "run");
 
-    private async void RunProcess(string args)
+    public void Test(string projectPath, string configuration = "Debug")
+        => StartDotnet($"test \"{projectPath}\" -c {configuration}", "test");
+
+    public void Clean(string projectPath, string configuration = "Debug")
+        => StartDotnet($"clean \"{projectPath}\" -c {configuration}", "clean");
+
+    public void Restore(string projectPath)
+        => StartDotnet($"restore \"{projectPath}\"", "restore");
+
+    private async void StartDotnet(string arguments, string label)
     {
-        Stop();
+        await StopAsync();
 
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",
-            Arguments = args,
+            Arguments = arguments,
             WorkingDirectory = Directory.GetCurrentDirectory(),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
+        };
+        psi.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        psi.Environment["DOTNET_NOLOGO"] = "1";
+
+        var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        var cts = new CancellationTokenSource();
+
+        lock (_gate) { _process = process; _cts = cts; }
+
+        _output.AppendOutput($"$ dotnet {arguments}{Environment.NewLine}", OutputType.Info);
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null) _output.AppendOutput(e.Data + Environment.NewLine);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null) _output.AppendOutput(e.Data + Environment.NewLine, OutputType.Error);
         };
 
-        using var process = new Process { StartInfo = psi };
-        _process = process;
         try
         {
-            process.OutputDataReceived += (_, e) => { if (e.Data != null) outputPanel.AppendOutput(e.Data + Environment.NewLine); };
-            process.ErrorDataReceived += (_, e) => { if (e.Data != null) outputPanel.AppendOutput(e.Data + Environment.NewLine, OutputType.Error); };
             process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            await process.WaitForExitAsync();
-            outputPanel.AppendOutput($"Process exited with code {process.ExitCode}.{Environment.NewLine}");
+            Started?.Invoke();
+
+            await process.WaitForExitAsync(cts.Token);
+
+            var exit = process.ExitCode;
+            var type = exit == 0 ? OutputType.Success : OutputType.Error;
+            _output.AppendOutput($"[{label}] exited with code {exit}.{Environment.NewLine}", type);
+            Exited?.Invoke(exit);
+        }
+        catch (OperationCanceledException)
+        {
+            _output.AppendOutput($"[{label}] cancelled.{Environment.NewLine}", OutputType.Error);
+            Exited?.Invoke(-1);
         }
         catch (Exception exception)
         {
-            outputPanel.AppendOutput(exception.Message + Environment.NewLine, OutputType.Error);
+            _output.AppendOutput($"[{label}] {exception.Message}{Environment.NewLine}", OutputType.Error);
+            Exited?.Invoke(-1);
         }
-        finally { Interlocked.CompareExchange(ref _process, null, process); }
+        finally
+        {
+            lock (_gate) { if (ReferenceEquals(_process, process)) _process = null; }
+            process.Dispose();
+            cts.Dispose();
+        }
     }
 
-    public void Stop()
+    public async Task StopAsync()
     {
-        var process = Interlocked.Exchange(ref _process, null);
+        Process? process;
+        CancellationTokenSource? cts;
+        lock (_gate) { process = _process; cts = _cts; }
+
         if (process == null) return;
-        try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
-        catch (InvalidOperationException) { }
+        try { cts?.Cancel(); } catch { }
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync().ConfigureAwait(false);
+            }
+        }
+        catch (InvalidOperationException) { /* already exited */ }
+        catch { /* best effort */ }
     }
+
+    public void Stop() => _ = StopAsync();
+
+    public void Dispose() => Stop();
 }
 
-public class RunDebugToolbar : UserControl
+public sealed class RunDebugToolbar : UserControl
 {
     public event Action? OnRunRequested;
     public event Action? OnDebugRequested;
@@ -76,19 +143,61 @@ public class RunDebugToolbar : UserControl
     public event Action? OnStepIntoRequested;
     public event Action? OnStepOutRequested;
     public event Action? OnRestartRequested;
-    private readonly Button _run;
-    private readonly Button _debug;
-    private readonly Button _build;
-    private readonly Button _pause;
-    private readonly Button _stepOver;
-    private readonly Button _stepInto;
-    private readonly Button _stepOut;
-    private readonly Button _restart;
+    public event Action? OnCleanRequested;
+    public event Action? OnTestRequested;
+    public event Action? OnConfigurationChanged;
+
+    private readonly Button _run, _debug, _stop, _build, _pause,
+                           _stepOver, _stepInto, _stepOut, _restart, _search;
     private readonly ComboBox _configuration;
+    private readonly MenuFlyout _moreMenu;
+
     public string Configuration => _configuration.SelectedItem as string ?? "Debug";
-    
+
     public RunDebugToolbar()
     {
+        // ---- Primary run group ----
+        _run = Tool(Symbol.Play, "Run Without Debugging (Ctrl+F5)", () => OnRunRequested?.Invoke());
+        _debug = Tool(Symbol.Play, "Start Debugging (F5)", () => OnDebugRequested?.Invoke(), accent: true);
+        _pause = Tool(Symbol.Pause, "Pause (F6)", () => OnPauseRequested?.Invoke());
+        _stop = Tool(Symbol.Stop, "Stop (Shift+F5)", () => OnStopRequested?.Invoke(), danger: true);
+        _restart = Tool(Symbol.Refresh, "Restart Debugging (Ctrl+Shift+F5)", () => OnRestartRequested?.Invoke());
+
+        // ---- Stepping group ----
+        _stepOver = Tool(Symbol.Next, "Step Over (F10)", () => OnStepOverRequested?.Invoke());
+        _stepInto = Tool(Symbol.Forward, "Step Into (F11)", () => OnStepIntoRequested?.Invoke());
+        _stepOut = Tool(Symbol.Back, "Step Out (Shift+F11)", () => OnStepOutRequested?.Invoke());
+
+        // ---- Build group ----
+        _build = Tool(Symbol.Repair, "Build Project (Ctrl+Shift+B)", () => OnBuildRequested?.Invoke());
+        _search = Tool(Symbol.Find, "Search Symbols (Ctrl+Shift+F)", () => OnSearchRequested?.Invoke());
+
+        // ---- Overflow ----
+        _moreMenu = BuildMoreMenu();
+        var more = new Button
+        {
+            Content = new SymbolIcon { Symbol = Symbol.More, FontSize = 16 },
+            Width = 30, Height = 30, Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Flyout = _moreMenu,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0)
+        };
+        ToolTip.SetTip(more, "More build actions");
+        Avalonia.Automation.AutomationProperties.SetName(more, "More build actions");
+
+        // ---- Configuration dropdown ----
+        _configuration = new ComboBox
+        {
+            ItemsSource = new[] { "Debug", "Release" },
+            SelectedIndex = 0,
+            MinWidth = 96,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        _configuration.SelectionChanged += (_, _) => OnConfigurationChanged?.Invoke();
+
+        // ---- Compose ----
         var stack = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -97,91 +206,124 @@ public class RunDebugToolbar : UserControl
             VerticalAlignment = VerticalAlignment.Center
         };
 
-        // Run Button
-        _run = CreateToolbarButton(Symbol.Play, "Run Without Debugging (Ctrl+F5)", Brushes.Green, () => OnRunRequested?.Invoke());
-
-        // Debug Button
-        _debug = CreateToolbarButton(Symbol.Play, "Start Debugging / Continue (F5)", Brushes.Teal, () => OnDebugRequested?.Invoke());
-
-        // Stop Button
-        var stopBtn = CreateToolbarButton(Symbol.Stop, "Stop (Shift+F5)", Brushes.IndianRed, () => OnStopRequested?.Invoke());
-        
-        // Build Button
-        _build = CreateToolbarButton(Symbol.Repair, "Build Project (Ctrl+Shift+B)", Brushes.SteelBlue, () => OnBuildRequested?.Invoke());
-        _pause = CreateToolbarButton(Symbol.Pause, "Pause (F6)", Brushes.Goldenrod, () => OnPauseRequested?.Invoke());
-        _stepOver = CreateToolbarButton(Symbol.Next, "Step Over (F10)", Brushes.LightGray, () => OnStepOverRequested?.Invoke());
-        _stepInto = CreateToolbarButton(Symbol.Forward, "Step Into (F11)", Brushes.LightGray, () => OnStepIntoRequested?.Invoke());
-        _stepOut = CreateToolbarButton(Symbol.Back, "Step Out (Shift+F11)", Brushes.LightGray, () => OnStepOutRequested?.Invoke());
-        _restart = CreateToolbarButton(Symbol.Refresh, "Restart Debugging (Ctrl+Shift+F5)", Brushes.MediumSeaGreen, () => OnRestartRequested?.Invoke());
-        
-        var searchBtn = new Button
-        {
-            Content = new SymbolIcon { Symbol = Symbol.Find, FontSize = 16 },
-            Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
-            Foreground = Brushes.White,
-            Margin = new Thickness(5, 0),
-            Padding = new Thickness(6, 3)
-        };
-        ToolTip.SetTip(searchBtn, "Search Symbols (Ctrl+Shift+F)");
-        searchBtn.Click += (_, _) => OnSearchRequested?.Invoke();
-        stack.Children.Add(searchBtn);
-
-        // Configuration Dropdown (e.g., Debug/Release)
-        _configuration = new ComboBox
-        {
-            ItemsSource = new List<string> { "Debug", "Release" },
-            SelectedIndex = 0,
-            //Height = 30,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-
         stack.Children.Add(_run);
         stack.Children.Add(_debug);
         stack.Children.Add(_pause);
-        stack.Children.Add(stopBtn);
+        stack.Children.Add(_stop);
+        stack.Children.Add(Sep());
         stack.Children.Add(_stepOver);
         stack.Children.Add(_stepInto);
         stack.Children.Add(_stepOut);
         stack.Children.Add(_restart);
+        stack.Children.Add(Sep());
         stack.Children.Add(_build);
-        stack.Children.Add(new Separator { Width = 1, Height = 20, Margin = new Thickness(5, 0) });
+        stack.Children.Add(_search);
+        stack.Children.Add(more);
+        stack.Children.Add(Sep());
         stack.Children.Add(_configuration);
 
         Content = new Border
         {
-            //Background = new SolidColorBrush(Color.Parse("#f3f3f3")),
-            //BorderBrush = Brushes.LightGray,
             BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = ResourceBrush("ControlBorderBrush", Brushes.Gray),
+            Background = ResourceBrush("ToolBarBackground", Brushes.Transparent),
             Child = stack
         };
+
         SetDebugState(DebugSessionState.Idle);
+    }
+
+    // Resolve a Fluent theme brush dynamically; falls back if the resource key
+    // doesn't exist in the current theme.
+    private IBrush ResourceBrush(string key, IBrush fallback)
+        => this.TryFindResource(key, ActualThemeVariant, out var value) && value is IBrush brush
+            ? brush : fallback;
+
+    private static Control Sep() => new Border
+    {
+        Width = 1, Height = 20,
+        Margin = new Thickness(5, 0),
+        Background = Brushes.Gray,
+        Opacity = 0.25
+    };
+
+    private MenuFlyout BuildMoreMenu()
+    {
+        var flyout = new MenuFlyout();
+
+        void Add(string header, Symbol icon, Action action)
+        {
+            var item = new MenuItem { Header = header, Icon = new SymbolIcon { Symbol = icon, FontSize = 14 } };
+            item.Click += (_, _) => action();
+            flyout.Items.Add(item);
+        }
+        void AddSep() => flyout.Items.Add(new Separator());
+
+        Add("Build", Symbol.Repair, () => OnBuildRequested?.Invoke());
+        Add("Clean", Symbol.Delete, () => OnCleanRequested?.Invoke());
+        Add("Test", Symbol.ReportHacked, () => OnTestRequested?.Invoke());
+        AddSep();
+        Add("Run Without Debugging", Symbol.Play, () => OnRunRequested?.Invoke());
+        Add("Start Debugging", Symbol.Play, () => OnDebugRequested?.Invoke());
+        Add("Restart Debugging", Symbol.Refresh, () => OnRestartRequested?.Invoke());
+        AddSep();
+        Add("Stop", Symbol.Stop, () => OnStopRequested?.Invoke());
+
+        return flyout;
     }
 
     public void SetDebugState(DebugSessionState state)
     {
         var idle = state is DebugSessionState.Idle or DebugSessionState.Faulted;
-        _run.IsEnabled = _build.IsEnabled = _configuration.IsEnabled = idle;
-        _debug.IsEnabled = idle || state == DebugSessionState.Paused;
-        _pause.IsEnabled = state == DebugSessionState.Running;
-        _restart.IsEnabled = state is DebugSessionState.Running or DebugSessionState.Paused;
-        _stepOver.IsEnabled = _stepInto.IsEnabled = _stepOut.IsEnabled = state == DebugSessionState.Paused;
-        ToolTip.SetTip(_debug, state == DebugSessionState.Paused ? "Continue (F5)" : "Start Debugging (F5)");
+        var running = state == DebugSessionState.Running;
+        var paused = state == DebugSessionState.Paused;
+
+        _run.IsEnabled = idle;
+        _debug.IsEnabled = idle || paused;
+        _build.IsEnabled = idle;
+        _configuration.IsEnabled = idle;
+
+        _pause.IsEnabled = running;
+        _stop.IsEnabled = running || paused;
+        _restart.IsEnabled = running || paused;
+
+        _stepOver.IsEnabled = _stepInto.IsEnabled = _stepOut.IsEnabled = paused;
+
+        ToolTip.SetTip(_debug, paused ? "Continue (F5)" : "Start Debugging (F5)");
     }
 
-    private Button CreateToolbarButton(Symbol icon, string tooltip, IBrush color, Action onClick)
+    private static Button Tool(Symbol icon, string tooltip, Action onClick,
+                               bool accent = false, bool danger = false)
     {
+        var iconControl = new SymbolIcon { Symbol = icon, FontSize = 16 };
+
+        // Fluent palette: the debug/run "accent" uses the theme accent for
+        // the glyph only, so the button itself still obeys theme backgrounds.
+        if (accent)
+        {
+            // The Fluent "Accent" is exposed via AccentFillColorDefaultBrush
+            // in the resource dictionary; fall back to a sane color otherwise.
+            iconControl.Bind(FAIconElement.ForegroundProperty,
+                iconControl.GetResourceObservable("AccentFillColorDefaultBrush"));
+        }
+        else if (danger)
+        {
+            iconControl.Bind(FAIconElement.ForegroundProperty,
+                iconControl.GetResourceObservable("SystemFillColorCriticalBrush"));
+        }
+        // default: leave Foreground null so the theme foreground applies.
+
         var btn = new Button
         {
-            Content = new SymbolIcon { Symbol = icon, FontSize = 16, Foreground = color },
+            Content = iconControl,
             Width = 30,
             Height = 30,
-            Padding = new Thickness(4),
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
             Background = Brushes.Transparent,
-            BorderThickness = new Thickness(0),
-            //Padding = new Thickness(6, 3),
-            //CornerRadius = new CornerRadius(3)
+            BorderThickness = new Thickness(0)
         };
-
         ToolTip.SetTip(btn, tooltip);
         Avalonia.Automation.AutomationProperties.SetName(btn, tooltip);
         btn.Click += (_, _) => onClick();
