@@ -4,11 +4,14 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Folding;
+using AvaloniaEdit.Rendering;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.Text;
 using AvaloniaEdit.Editing;
@@ -44,6 +47,7 @@ public class CodeEditor : UserControl
     private FoldingManager? _foldingManager;
     private ToolTip _toolTip;
     private CancellationTokenSource? _toolTipCts;
+    private int? _hoverOffset;
     private readonly Brush _currentLineBackground = new SolidColorBrush(Color.FromArgb(40, 100, 100, 100));
     private readonly Brush _selectionBrush = new SolidColorBrush(Color.FromArgb(80, 0, 120, 215));
     private readonly Brush _lineNumberForeground = new SolidColorBrush(Color.FromRgb(128, 128, 128));
@@ -55,9 +59,23 @@ public class CodeEditor : UserControl
     private AdhocWorkspace _workspace;
     private DocumentId _documentId;
     private bool _isUpdating;
+    private readonly DiagnosticRenderer _diagnosticRenderer = new();
+    internal DocumentId DocumentId => _documentId;
     public event EventHandler<string>? TextChanged;
     public event EventHandler? Saved;
+    public event EventHandler? SaveRequested;
     private BreadcrumbBar _breadcrumbBar = new();
+    private BreakpointMargin? _breakpointMargin;
+
+    public void ConfigureDebugging(BreakpointStore breakpoints)
+    {
+        if (_breakpointMargin != null || !FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return;
+        _breakpointMargin = new BreakpointMargin(_editor, breakpoints, FilePath);
+        _editor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
+    }
+
+    public void ToggleBreakpoint() => _breakpointMargin?.ToggleAtCaret();
+    public void SetExecutionLine(int? line) => _breakpointMargin?.SetExecutionLine(line);
     
     public event EventHandler<GoToDefinitionEventArgs>? GoToDefinitionRequested;
     public event EventHandler<FindReferencesEventArgs>? FindReferencesRequested;
@@ -109,6 +127,7 @@ public class CodeEditor : UserControl
 
     private void OnTextChanged(object? sender, EventArgs e)
     {
+        SetDiagnostics([]);
         if (_isUpdating) return;
         
         _isUpdating = true;
@@ -127,9 +146,15 @@ public class CodeEditor : UserControl
 
     public void CloseEditor()
     {
+        _breakpointMargin?.Dispose();
         _editor.TextChanged -= OnTextChanged;
         var solution = _workspace.CurrentSolution.RemoveDocument(_documentId);
         _workspace.TryApplyChanges(solution);
+    }
+
+    internal void RebindWorkspace(AdhocWorkspace workspace)
+    {
+        _workspace = workspace;
     }
 
     public CodeEditor(string filePath, AdhocWorkspace workspace, DocumentId docId, string code)
@@ -168,6 +193,7 @@ public class CodeEditor : UserControl
         };
 
         ConfigureEditorOptions();
+        _editor.TextArea.TextView.BackgroundRenderers.Add(_diagnosticRenderer);
         SetupEventHandlers();
         SetupFolding();
         SetupContextMenu();
@@ -188,14 +214,13 @@ public class CodeEditor : UserControl
         rootGrid.Children.Add(_breadcrumbBar);
         rootGrid.Children.Add(_editor);
 
-        // settings
-        SettingsData.Instance.SettingsChanged += (_, _) =>
+        AttachedToVisualTree += (_, _) =>
         {
-            var inst = SettingsData.Instance;
-            _editor.FontFamily = inst.FontFamily;
-            _editor.FontSize = inst.FontSize;
-            // ...
+            SettingsData.Instance.SettingsChanged += OnSettingsChanged;
+            ApplyEditorSettings();
         };
+        DetachedFromVisualTree += (_, _) => SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
+        ApplyEditorSettings();
 
         // 5. Nastavenie Gridu ako hlavný obsah widgetu
         Content = rootGrid;
@@ -222,6 +247,75 @@ public class CodeEditor : UserControl
         _editor.TextArea.SelectionBorder = null;
     }
 
+    private void OnSettingsChanged(object? sender, EventArgs e) => ApplyEditorSettings();
+
+    public void SetDiagnostics(IEnumerable<Diagnostic> diagnostics)
+    {
+        HideTooltip();
+        _diagnosticRenderer.Diagnostics = diagnostics
+            .Where(diagnostic => diagnostic.Location.IsInSource &&
+                diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+            .ToArray();
+        _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
+    }
+
+    private sealed class DiagnosticRenderer : IBackgroundRenderer
+    {
+        public Diagnostic[] Diagnostics { get; set; } = [];
+        public KnownLayer Layer => KnownLayer.Selection;
+
+        public void Draw(TextView textView, DrawingContext drawingContext)
+        {
+            if (!textView.VisualLinesValid || textView.Document is not { } document)
+                return;
+
+            foreach (var diagnostic in Diagnostics)
+            {
+                var span = diagnostic.Location.SourceSpan;
+                if (span.Start > document.TextLength || span.End > document.TextLength)
+                    continue;
+
+                var start = span.Start;
+                var length = span.Length;
+                if (length == 0 && document.TextLength > 0)
+                {
+                    start = Math.Min(start, document.TextLength - 1);
+                    length = 1;
+                }
+
+                var pen = new Pen(diagnostic.Severity == DiagnosticSeverity.Error
+                    ? Brushes.Red : Brushes.Orange, 1);
+                foreach (var rectangle in BackgroundGeometryBuilder.GetRectsForSegment(
+                    textView, new SimpleSegment(start, length)))
+                {
+                    var right = Math.Max(rectangle.Right, rectangle.Left + 4);
+                    for (var position = rectangle.Left; position < right; position += 4)
+                    {
+                        drawingContext.DrawLine(pen, new Point(position, rectangle.Bottom - 1),
+                            new Point(Math.Min(position + 2, right), rectangle.Bottom - 3));
+                        drawingContext.DrawLine(pen, new Point(Math.Min(position + 2, right), rectangle.Bottom - 3),
+                            new Point(Math.Min(position + 4, right), rectangle.Bottom - 1));
+                    }
+                }
+            }
+        }
+    }
+
+    private void ApplyEditorSettings()
+    {
+        var settings = SettingsData.Instance;
+        _editor.FontFamily = new FontFamily(settings.FontFamily);
+        _editor.FontSize = settings.FontSize;
+        _editor.ShowLineNumbers = settings.ShowLineNumbers;
+        _editor.WordWrap = settings.WordWrap;
+        _editor.Options.IndentationSize = settings.IndentationSize;
+        _editor.Options.ConvertTabsToSpaces = settings.ConvertTabsToSpaces;
+        if (Color.TryParse(settings.EditorBackground, out var background))
+            _editor.Background = new SolidColorBrush(background);
+        if (Color.TryParse(settings.EditorForeground, out var foreground))
+            _editor.Foreground = new SolidColorBrush(foreground);
+    }
+
     private void SetupEventHandlers()
     {
         _editor.TextChanged += OnTextChanged;
@@ -230,12 +324,14 @@ public class CodeEditor : UserControl
 
         // Ctrl+S save
         _editor.KeyDown += Editor_KeyDown;
+        _editor.AddHandler(InputElement.KeyDownEvent, Editor_PreviewKeyDown, RoutingStrategies.Tunnel);
 
         // Ctrl+Click for Go to Definition
-        _editor.TextArea.TextView.PointerPressed += Editor_PointerPressed;
+        _editor.AddHandler(InputElement.PointerPressedEvent, Editor_PointerPressed, RoutingStrategies.Tunnel);
 
         // Tooltip with delay and proper positioning
-        _editor.TextArea.TextView.PointerMoved += TextView_PointerMoved;
+        _editor.TextArea.TextView.AddHandler(InputElement.PointerMovedEvent,
+            TextView_PointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
         _editor.TextArea.TextView.PointerExited += (_, _) => HideTooltip();
 
         // Hide tooltip when scrolling
@@ -248,35 +344,37 @@ public class CodeEditor : UserControl
         }
     }
     
-    private async void Editor_PointerPressed(object? sender, PointerPressedEventArgs e)
+    private void Editor_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        // Check for Ctrl+Click
-        var keyModifiers = e.KeyModifiers;
-        if (keyModifiers.HasFlag(KeyModifiers.Control))
+        var textView = _editor.TextArea.TextView;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) &&
+            e.GetCurrentPoint(textView).Properties.IsLeftButtonPressed)
         {
-            var textView = _editor.TextArea.TextView;
             var position = e.GetPosition(textView);
-            var tvp = textView.GetPosition(position);
+            if (!new Rect(textView.Bounds.Size).Contains(position))
+                return;
+
+            var tvp = textView.GetPositionFloor(position + textView.ScrollOffset);
         
             if (tvp.HasValue)
             {
                 // Set caret position
                 _editor.CaretOffset = _editor.Document.GetOffset(tvp.Value.Line, tvp.Value.Column);
             
-                // Go to definition
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    GoToDefinition();
-                });
-            
                 e.Handled = true;
+                GoToDefinition();
             }
         }
     }
     
-    private void Editor_KeyDown(object? sender, KeyEventArgs e)
+    private async void Editor_KeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        if (e.Key == Key.F9 && e.KeyModifiers == KeyModifiers.None)
+        {
+            ToggleBreakpoint();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.S && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             Save();
             e.Handled = true;
@@ -285,14 +383,20 @@ public class CodeEditor : UserControl
         {
             // Find dialog
             var dialog = new FindReplaceDialog(_editor, false);
-            dialog.Show();
+            if (this.GetVisualRoot() is Window owner)
+                dialog.Show(owner);
+            else
+                dialog.Show();
             e.Handled = true;
         }
         else if (e.Key == Key.H && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             // Replace dialog
             var dialog = new FindReplaceDialog(_editor, true);
-            dialog.Show();
+            if (this.GetVisualRoot() is Window owner)
+                dialog.Show(owner);
+            else
+                dialog.Show();
             e.Handled = true;
         }
         else if (e.Key == Key.G && e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -310,7 +414,7 @@ public class CodeEditor : UserControl
                  e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
             // Ctrl+Shift+R - Find References
-            FindReferences();
+            await FindReferences();
             e.Handled = true;
         }
         else if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control) && 
@@ -359,6 +463,9 @@ public class CodeEditor : UserControl
         // Separator
         var separator2 = new Separator();
 
+        var quickActionsItem = new MenuItem { Header = "Quick Actions (Ctrl+.)" };
+        quickActionsItem.Click += async (_, _) => await ShowQuickActionsAsync();
+
         // Format Document
         var formatItem = new MenuItem { Header = "Format Document" };
         formatItem.Click += (_, _) => FormatDocument();
@@ -378,6 +485,9 @@ public class CodeEditor : UserControl
         var goToLineItem = new MenuItem { Header = "Go to Line..." };
         goToLineItem.Click += (_, _) => ShowGoToLineDialog();
 
+        var breakpointItem = new MenuItem { Header = "Toggle Breakpoint", InputGesture = new KeyGesture(Key.F9) };
+        breakpointItem.Click += (_, _) => ToggleBreakpoint();
+
         contextMenu.Items.Add(cutItem);
         contextMenu.Items.Add(copyItem);
         contextMenu.Items.Add(pasteItem);
@@ -385,11 +495,13 @@ public class CodeEditor : UserControl
         contextMenu.Items.Add(goToDefinitionItem);
         contextMenu.Items.Add(findReferencesItem);
         contextMenu.Items.Add(separator2);
+        contextMenu.Items.Add(quickActionsItem);
         contextMenu.Items.Add(formatItem);
         contextMenu.Items.Add(formatSelectionItem);
         contextMenu.Items.Add(separator3);
         contextMenu.Items.Add(selectAllItem);
         contextMenu.Items.Add(goToLineItem);
+        contextMenu.Items.Add(breakpointItem);
 
         _editor.ContextMenu = contextMenu;
     }
@@ -409,6 +521,12 @@ public class CodeEditor : UserControl
 
     private void Save()
     {
+        if (string.IsNullOrEmpty(FilePath))
+        {
+            SaveRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         try
         {
             File.WriteAllText(FilePath, _editor.Text);
@@ -434,24 +552,8 @@ public class CodeEditor : UserControl
         {
             var document = _workspace.CurrentSolution.GetDocument(_documentId);
             if (document == null) return null;
-
-            var model = await document.GetSemanticModelAsync();
-            var root = await document.GetSyntaxRootAsync();
-            if (root == null || model == null) return null;
-
             var caretOffset = _editor.CaretOffset;
-            var token = root.FindToken(caretOffset);
-            if (token.Parent == null) return null;
-
-            var symbolInfo = model.GetSymbolInfo(token.Parent);
-            var symbol = symbolInfo.Symbol ?? model.GetDeclaredSymbol(token.Parent);
-
-            if (symbol == null && token.Parent.Parent != null)
-            {
-                symbol = model.GetSymbolInfo(token.Parent.Parent).Symbol;
-            }
-
-            return symbol;
+            return await SymbolFinder.FindSymbolAtPositionAsync(document, caretOffset);
         }
         catch
         {
@@ -465,8 +567,8 @@ public class CodeEditor : UserControl
         var symbol = await GetSymbolAtCaret();
         if (symbol == null) return;
 
-        var location = symbol.Locations.FirstOrDefault();
-        if (location == null || !location.IsInSource)
+        var location = symbol.Locations.FirstOrDefault(candidate => candidate.IsInSource);
+        if (location == null)
             return;
 
         var lineSpan = location.GetLineSpan();
@@ -522,9 +624,7 @@ public class CodeEditor : UserControl
             // Update editor
             Dispatcher.UIThread.Post(() =>
             {
-                _isUpdating = true;
-                _editor.Text = formattedText.ToString();
-                _isUpdating = false;
+                _editor.Document.Replace(0, _editor.Document.TextLength, formattedText.ToString());
             });
         }
         catch (Exception ex)
@@ -614,86 +714,34 @@ public class CodeEditor : UserControl
 
     private async void TextView_PointerMoved(object? sender, PointerEventArgs e)
     {
-        // Cancel previous tooltip request
-        _toolTipCts?.Cancel();
+        var textView = _editor.TextArea.TextView;
+        if (!textView.VisualLinesValid) return;
+        var position = e.GetPosition(textView);
+        if (!new Rect(textView.Bounds.Size).Contains(position))
+        {
+            HideTooltip();
+            return;
+        }
+        var textPosition = textView.GetPositionFloor(position + textView.ScrollOffset);
+        if (!textPosition.HasValue)
+        {
+            HideTooltip();
+            return;
+        }
+        var line = _editor.Document.GetLineByNumber(textPosition.Value.Line);
+        var offset = line.Offset + Math.Clamp(textPosition.Value.Column - 1, 0, line.Length);
+        if (_hoverOffset == offset) return;
+        HideTooltip();
+        _toolTipCts?.Dispose();
         _toolTipCts = new CancellationTokenSource();
         var token = _toolTipCts.Token;
-
-        var textView = _editor.TextArea.TextView;
-        
-        // Get the position relative to the text view
-        var position = e.GetPosition(textView);
-        
-        // Also get the scroll offset to adjust position
-        var scrollOffset = textView.ScrollOffset;
+        _hoverOffset = offset;
 
         try
         {
             await Task.Delay(500, token);
-
-            await Dispatcher.UIThread.InvokeAsync(async () =>
-            {
-                if (token.IsCancellationRequested) return;
-
-                // Convert the mouse position to document coordinates accounting for scroll
-                var visualPosition = new Point(position.X + scrollOffset.X, position.Y + scrollOffset.Y);
-                
-                // Get the position in the text view
-                var tvp = textView.GetPosition(visualPosition);
-                if (!tvp.HasValue)
-                {
-                    HideTooltip();
-                    return;
-                }
-
-                int documentOffset = _editor.Document.GetOffset(tvp.Value.Line, tvp.Value.Column);
-                var document = _workspace.CurrentSolution.GetDocument(_documentId);
-                if (document == null) return;
-
-                var model = await document.GetSemanticModelAsync();
-                var root = await document.GetSyntaxRootAsync();
-
-                if (root == null || model == null || documentOffset < 0 || documentOffset >= root.FullSpan.Length)
-                {
-                    HideTooltip();
-                    return;
-                }
-
-                try
-                {
-                    var token2 = root.FindToken(documentOffset);
-                    if (token2.Parent == null)
-                    {
-                        HideTooltip();
-                        return;
-                    }
-
-                    var symbolInfo = model.GetSymbolInfo(token2.Parent);
-                    var symbol = symbolInfo.Symbol ?? model.GetDeclaredSymbol(token2.Parent);
-
-                    if (symbol == null && token2.Parent.Parent != null)
-                    {
-                        symbol = model.GetSymbolInfo(token2.Parent.Parent).Symbol;
-                    }
-
-                    if (symbol != null)
-                    {
-                        // Use the extracted SymbolTooltip class
-                        _toolTip = SymbolTooltip.CreateRichTooltip(symbol);
-                        ToolTip.SetTip(_editor, _toolTip);
-                        ToolTip.SetPlacement(_editor, PlacementMode.Pointer);
-                        ToolTip.SetIsOpen(_editor, true);
-                    }
-                    else
-                    {
-                        HideTooltip();
-                    }
-                }
-                catch (Exception)
-                {
-                    HideTooltip();
-                }
-            });
+            token.ThrowIfCancellationRequested();
+            await ShowTooltipAtOffsetAsync(offset, token);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -702,9 +750,76 @@ public class CodeEditor : UserControl
         }
     }
 
+    private ToolTip? CreateDiagnosticTooltip(int offset)
+    {
+        var matches = _diagnosticRenderer.Diagnostics.Where(diagnostic =>
+        {
+            var span = diagnostic.Location.SourceSpan;
+            if (span.Length > 0) return span.Contains(offset);
+            var start = Math.Min(span.Start, Math.Max(0, _editor.Document.TextLength - 1));
+            return offset == start;
+        }).OrderByDescending(diagnostic => diagnostic.Severity).ToList();
+        if (matches.Count == 0) return null;
+
+        var content = new StackPanel { Spacing = 8, MaxWidth = 480 };
+        foreach (var diagnostic in matches)
+        {
+            var entry = new StackPanel { Spacing = 3 };
+            entry.Children.Add(new TextBlock
+            {
+                Text = $"{diagnostic.Severity} {diagnostic.Id}",
+                Foreground = diagnostic.Severity == DiagnosticSeverity.Error ? Brushes.LightCoral : Brushes.Orange,
+                FontWeight = FontWeight.SemiBold
+            });
+            entry.Children.Add(new TextBlock { Text = diagnostic.GetMessage(), TextWrapping = TextWrapping.Wrap });
+            content.Children.Add(entry);
+        }
+
+        return new ToolTip
+        {
+            Content = content,
+            Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
+            Foreground = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(10, 8),
+            FontSize = 12
+        };
+    }
+
+    private async Task ShowTooltipAtOffsetAsync(int offset, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var tooltip = CreateDiagnosticTooltip(offset);
+        if (tooltip == null)
+        {
+            var document = _workspace.CurrentSolution.GetDocument(_documentId);
+            if (document == null) return;
+            var model = await document.GetSemanticModelAsync(cancellationToken);
+            var root = await document.GetSyntaxRootAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (root == null || model == null || offset < 0 || offset >= root.FullSpan.Length) return;
+            var syntaxToken = root.FindToken(offset);
+            if (syntaxToken.Parent == null) return;
+            var symbol = model.GetSymbolInfo(syntaxToken.Parent, cancellationToken).Symbol ??
+                model.GetDeclaredSymbol(syntaxToken.Parent, cancellationToken);
+            if (symbol == null && syntaxToken.Parent.Parent != null)
+                symbol = model.GetSymbolInfo(syntaxToken.Parent.Parent, cancellationToken).Symbol;
+            if (symbol == null) return;
+            tooltip = SymbolTooltip.CreateRichTooltip(symbol);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        _toolTip = tooltip;
+        ToolTip.SetTip(_editor, _toolTip);
+        ToolTip.SetPlacement(_editor, PlacementMode.Pointer);
+        ToolTip.SetIsOpen(_editor, true);
+    }
+
     private void HideTooltip()
     {
         _toolTipCts?.Cancel();
+        _hoverOffset = null;
         ToolTip.SetIsOpen(_editor, false);
     }
 
@@ -712,6 +827,105 @@ public class CodeEditor : UserControl
     {
         if (string.IsNullOrEmpty(e.Text)) return;
 
+        var trigger = e.Text == "."
+            ? CompletionTrigger.CreateInsertionTrigger('.')
+            : CompletionTrigger.Invoke;
+        await ShowCompletionsAsync(e.Text, trigger);
+    }
+
+    private void Editor_PreviewKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.OemPeriod && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            _ = ShowQuickActionsAsync();
+            return;
+        }
+
+        if (e.Key != Key.Space || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            return;
+
+        e.Handled = true;
+        _ = ShowCompletionsAsync(null, CompletionTrigger.Invoke);
+    }
+
+    private async Task ShowQuickActionsAsync()
+    {
+        var document = _workspace.CurrentSolution.GetDocument(_documentId);
+        if (document is null)
+            return;
+
+        var snapshot = _editor.Text ?? "";
+        var caretOffset = _editor.CaretOffset;
+        document = document.WithText(SourceText.From(snapshot));
+
+        try
+        {
+            _completionWindow?.Close();
+            var actions = await QuickActions.GetActionsAsync(document, caretOffset, CancellationToken.None);
+            if ((_editor.Text ?? "") != snapshot || _editor.CaretOffset != caretOffset || this.GetVisualRoot() is null)
+                return;
+
+            var menu = new ContextMenu();
+            if (actions.Count == 0)
+            {
+                menu.Items.Add(new MenuItem { Header = "No quick actions available", IsEnabled = false });
+            }
+            else
+            {
+                foreach (var action in actions)
+                {
+                    var item = new MenuItem { Header = action.Title };
+                    item.Click += async (_, _) => await ApplyQuickActionAsync(action, document, snapshot);
+                    menu.Items.Add(item);
+                }
+            }
+
+            menu.Open(_editor);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Quick actions failed: {ex.Message}");
+            var menu = new ContextMenu();
+            menu.Items.Add(new MenuItem { Header = "Could not load quick actions", IsEnabled = false });
+            menu.Open(_editor);
+        }
+    }
+
+    private async Task ApplyQuickActionAsync(CodeAction action, Document originalDocument, string snapshot)
+    {
+        try
+        {
+            var operations = await action.GetOperationsAsync(CancellationToken.None);
+            var changedDocument = operations.OfType<ApplyChangesOperation>()
+                .SingleOrDefault()?.ChangedSolution.GetDocument(_documentId);
+            if (changedDocument is null || (_editor.Text ?? "") != snapshot)
+                return;
+
+            var changes = await changedDocument.GetTextChangesAsync(originalDocument);
+            if ((_editor.Text ?? "") != snapshot)
+                return;
+
+            _editor.Document.BeginUpdate();
+            try
+            {
+                foreach (var change in changes.OrderByDescending(change => change.Span.Start))
+                    _editor.Document.Replace(change.Span.Start, change.Span.Length, change.NewText ?? "");
+            }
+            finally
+            {
+                _editor.Document.EndUpdate();
+            }
+            _editor.Focus();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Quick action failed: {ex.Message}");
+        }
+    }
+
+    private async Task ShowCompletionsAsync(string? inputText, CompletionTrigger trigger)
+    {
         try
         {
             // Sync the workspace immediately
@@ -725,10 +939,6 @@ public class CodeEditor : UserControl
             var completionService = CompletionService.GetService(document);
             if (completionService == null) return;
 
-            CompletionTrigger trigger = e.Text == "."
-                ? CompletionTrigger.CreateInsertionTrigger('.')
-                : CompletionTrigger.Invoke;
-
             var results = await completionService.GetCompletionsAsync(document, caretOffset, trigger);
             if (results.ItemsList.Count == 0) return;
 
@@ -737,7 +947,7 @@ public class CodeEditor : UserControl
 
             var items = results.ItemsList;
             
-            if (e.Text != ".")
+            if (inputText != ".")
             {
                 items = items.Where(i => i.FilterText.StartsWith(filterText, StringComparison.OrdinalIgnoreCase))
                              .ToImmutableArray();
@@ -758,7 +968,7 @@ public class CodeEditor : UserControl
             foreach (var item in items.OrderByDescending(i => i.Rules.SelectionBehavior == CompletionItemSelectionBehavior.HardSelection)
                                       .ThenBy(i => i.SortText))
             {
-                if (e.Text == "." && item.Tags.Contains("Keyword")) continue;
+                if (inputText == "." && item.Tags.Contains("Keyword")) continue;
                 // When creating completion items
                 data.Add(new MyCompletionData(
                     item.DisplayText, 
@@ -770,6 +980,7 @@ public class CodeEditor : UserControl
 
             if (data.Count > 0)
             {
+                _completionWindow.StartOffset = results.Span.Start;
                 _completionWindow.Show();
                 _completionWindow.Closed += (_, _) => _completionWindow = null;
             }

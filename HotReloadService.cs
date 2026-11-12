@@ -36,12 +36,12 @@ public static class RoslynCompiler
     }
 }
 
-public class HotReloadService
+public class IDEHotReloadService
 {
     private EmitBaseline _baseline = null!;
     private Assembly _assembly = null!;
 	
-	public HotReloadService(Assembly assembly, EmitBaseline baseline)
+	public IDEHotReloadService(Assembly assembly, EmitBaseline baseline)
 	{
 		Initialize(assembly, baseline);
 	}
@@ -67,14 +67,6 @@ public class HotReloadService
         using var ilStream = new MemoryStream();
         using var pdbStream = new MemoryStream();
 
-        var diff = compilation.EmitDifference(
-            _baseline,
-            edits,
-            mdStream,
-            ilStream,
-            pdbStream,
-            []);
-
         var diff1 = compilation.EmitDifference(
             _baseline,
             edits,
@@ -83,10 +75,10 @@ public class HotReloadService
             ilStream,
             pdbStream);
 
-        if (!diff.Success)
+        if (!diff1.Success)
         {
             Console.WriteLine("Hot reload failed:");
-            foreach (var d in diff.Diagnostics)
+            foreach (var d in diff1.Diagnostics)
                 Console.WriteLine(d);
             return;
         }

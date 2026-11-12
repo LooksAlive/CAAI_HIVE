@@ -74,9 +74,9 @@ public class TerminalWidget : UserControl
         var inputPanel = new Border
         {
             Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
-            Padding = new Thickness(10),
+            Padding = new Thickness(6, 2),
             Margin = new Thickness(5, 0, 5, 5),
-            CornerRadius = new CornerRadius(4)
+            CornerRadius = new CornerRadius(2)
         };
 
         var inputGrid = new Grid
@@ -102,6 +102,8 @@ public class TerminalWidget : UserControl
             FontFamily = new FontFamily("Consolas"),
             FontSize = 13,
             BorderThickness = new Thickness(0),
+            Padding = new Thickness(2),
+            MinHeight = 0,
             Watermark = "Type command or press Ctrl+Shift+C to copy"
         };
         _inputBox.KeyDown += InputBox_KeyDown;
@@ -143,8 +145,10 @@ public class TerminalWidget : UserControl
     {
         if (e.Key == Key.Enter)
         {
-            ExecuteCommand(_inputBox.Text);
+            var command = _inputBox.Text;
+            _inputBox.Text = "";
             e.Handled = true;
+            ExecuteCommand(command);
         }
         else if (e.Key == Key.Up)
         {

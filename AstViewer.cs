@@ -16,7 +16,7 @@ namespace CAAI
 {
     public class AstViewer : UserControl
     {
-        private TreeView _treeView;
+        private TreeView _treeView = null!;
         private Grid? _mainGrid;
         private TextBlock? _statusText;
         private ProgressBar? _loadingIndicator;
@@ -158,7 +158,10 @@ namespace CAAI
             }
             else if (e.NewValue == null)
             {
+                _currentSyntaxTree = null;
                 _treeView.ItemsSource = null;
+                _statusText?.Text = "";
+                _loadingIndicator?.IsVisible = false;
             }
         }
 
@@ -181,9 +184,11 @@ namespace CAAI
             // Create the tree on UI thread
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                if (!ReferenceEquals(_currentSyntaxTree, rootNode)) return;
                 try
                 {
                     var rootItem = ConvertToTreeViewItem(rootNode);
+                    rootItem.IsExpanded = true;
                     _treeView.ItemsSource = new[] { rootItem };
                 }
                 catch (Exception ex)

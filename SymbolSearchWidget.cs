@@ -10,6 +10,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Controls.Templates;
 using Avalonia.VisualTree;
 using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
 
 namespace CAAI;
 
@@ -44,8 +45,8 @@ public record SymbolItemViewModel(ISymbol Symbol, string ProjectName)
                 // Add return type for methods/properties
                 if (Symbol is IMethodSymbol method && !method.MethodKind.ToString().Contains("Constructor"))
                 {
-                    var returnType = method.ReturnType.Name;
-                    return $"{kind} • {returnType} {Symbol.Name}{accessibility} • {location}";
+                    var signature = method.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
+                    return $"{kind} • {signature}{accessibility} • {location}";
                 }
                 if (Symbol is IPropertySymbol property)
                 {
@@ -116,6 +117,8 @@ public record SymbolItemViewModel(ISymbol Symbol, string ProjectName)
     }
 }
 
+public record SymbolReferenceItem(ReferenceLocation Reference, string FilePath, int Line, int Column, string Preview);
+
 public class SymbolSearchWidget : UserControl
 {
     public Window? ParentWindow { get; set; }
@@ -129,6 +132,18 @@ public class SymbolSearchWidget : UserControl
     private TextBlock _statsText = null!;
     private Border _searchContainer = null!;
     private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _referencesCts;
+    private readonly ObservableCollection<SymbolReferenceItem> _references = new();
+    private ListBox _referencesList = null!;
+    private TextBlock _referencesStatus = null!;
+    private readonly TextBlock _referencesEmpty = new()
+    {
+        Text = "Select a symbol",
+        Foreground = Brushes.Gray,
+        FontSize = 12,
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center
+    };
     private readonly ObservableCollection<SymbolItemViewModel> _results = new();
     
     // Recent searches
@@ -155,8 +170,13 @@ public class SymbolSearchWidget : UserControl
         Content = mainLayout;
     
         InitializeEvents();
+        DetachedFromVisualTree += (_, _) =>
+        {
+            _searchCts?.Cancel();
+            _referencesCts?.Cancel();
+        };
         LoadRecentSearches();
-        AnalyzeWorkspace();
+        _ = AnalyzeWorkspace();
     }
     
     private void CloseDialog()
@@ -191,7 +211,7 @@ public class SymbolSearchWidget : UserControl
         // Use Grid instead of StackPanel for better splitter support
         var mainGrid = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto, Auto, Auto, *, Auto, Auto"),
+            RowDefinitions = new RowDefinitions("Auto, Auto, Auto, *, 4, 170"),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
         };
@@ -397,7 +417,7 @@ public class SymbolSearchWidget : UserControl
         return searchBorder;
     }
 
-    private ListBox CreateResultsContainer()
+    private Border CreateResultsContainer()
     {
         var resultsBorder = new Border
         {
@@ -408,9 +428,9 @@ public class SymbolSearchWidget : UserControl
             VerticalAlignment = VerticalAlignment.Stretch 
         };
 
-        var resultsPanel = new StackPanel 
+        var resultsPanel = new Grid
         { 
-            Spacing = 20,
+            RowDefinitions = new RowDefinitions("Auto, *"),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Stretch
         };
@@ -480,14 +500,16 @@ public class SymbolSearchWidget : UserControl
                 Text = vm.DisplayName,
                 FontWeight = FontWeight.Bold,
                 FontSize = 13,
-                Foreground = vm.Color
+                Foreground = vm.Color,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
             
             var detailText = new TextBlock
             {
                 Text = vm.DetailInfo,
                 FontSize = 11,
-                Foreground = Brushes.Gray
+                Foreground = Brushes.Gray,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
             
             stack.Children.Add(nameText);
@@ -503,35 +525,71 @@ public class SymbolSearchWidget : UserControl
         });
 
         ScrollViewer.SetVerticalScrollBarVisibility(_resultsList, ScrollBarVisibility.Visible);
+        ScrollViewer.SetHorizontalScrollBarVisibility(_resultsList, ScrollBarVisibility.Disabled);
 
-        //resultsPanel.Children.Add(_resultsList);
-        //resultsBorder.Child = resultsPanel;
-        return _resultsList;//resultsBorder;
+        Grid.SetRow(_resultsList, 1);
+        resultsPanel.Children.Add(_resultsList);
+        resultsBorder.Child = resultsPanel;
+        return resultsBorder;
     }
 
     private Border CreateFooter()
     {
         var footer = new Border
         {
-            MinHeight = 100, // Fixed height, can be resized via splitter
+            MinHeight = 100,
             Background = new SolidColorBrush(Color.FromRgb(35, 35, 40)),
             Padding = new Thickness(15, 8),
             CornerRadius = new CornerRadius(0, 0, 8, 8)
         };
 
-        var footerPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 20 };
-
-        var shortcut1 = new TextBlock { Text = "↑/↓: Navigate", FontSize = 10, Foreground = Brushes.Gray };
-        var shortcut2 = new TextBlock { Text = "Enter: Select", FontSize = 10, Foreground = Brushes.Gray };
-        var shortcut3 = new TextBlock { Text = "Esc: Close", FontSize = 10, Foreground = Brushes.Gray };
-        var shortcut4 = new TextBlock { Text = "Ctrl+F: Focus", FontSize = 10, Foreground = Brushes.Gray };
-
-        footerPanel.Children.Add(shortcut1);
-        footerPanel.Children.Add(shortcut2);
-        footerPanel.Children.Add(shortcut3);
-        footerPanel.Children.Add(shortcut4);
-
-        footer.Child = footerPanel;
+        var panel = new Grid { RowDefinitions = new RowDefinitions("Auto, *") };
+        _referencesStatus = new TextBlock
+        {
+            Text = "References",
+            FontSize = 12,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = Brushes.LightGray,
+            Margin = new Thickness(0, 0, 0, 6),
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        _referencesList = new ListBox
+        {
+            ItemsSource = _references,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            SelectionMode = SelectionMode.Single,
+            ItemTemplate = new FuncDataTemplate<SymbolReferenceItem>((reference, _) =>
+            {
+                if (reference == null) return new Border();
+                var row = new StackPanel { Spacing = 2, Margin = new Thickness(4) };
+                row.Children.Add(new TextBlock
+                {
+                    Text = $"{Path.GetFileName(reference.FilePath.Length == 0 ? reference.Reference.Document.Name : reference.FilePath)}:{reference.Line + 1}:{reference.Column + 1}",
+                    Foreground = Brushes.LightSkyBlue,
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                });
+                row.Children.Add(new TextBlock
+                {
+                    Text = reference.Preview,
+                    Foreground = Brushes.LightGray,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 11,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                });
+                ToolTip.SetTip(row, $"{reference.Reference.Document.Project.Name} | {reference.FilePath}");
+                return row;
+            })
+        };
+        ScrollViewer.SetHorizontalScrollBarVisibility(_referencesList, ScrollBarVisibility.Disabled);
+        var area = new Grid();
+        area.Children.Add(_referencesList);
+        area.Children.Add(_referencesEmpty);
+        panel.Children.Add(_referencesStatus);
+        Grid.SetRow(area, 1);
+        panel.Children.Add(area);
+        footer.Child = panel;
         return footer;
     }
 
@@ -564,9 +622,57 @@ public class SymbolSearchWidget : UserControl
 
         _resultsList.KeyDown += (s, e) =>
         {
-            if (e.Key == Key.Enter) SelectCurrent();
-            if (e.Key == Key.Escape) OnCancel?.Invoke();
+            if (e.Key == Key.Enter) { SelectCurrent(); e.Handled = true; }
+            if (e.Key == Key.Escape) { OnCancel?.Invoke(); e.Handled = true; }
         };
+        _resultsList.SelectionChanged += (_, _) =>
+            _ = FindReferences((_resultsList.SelectedItem as SymbolItemViewModel)?.Symbol);
+        _resultsList.AddHandler(DoubleTappedEvent, (_, e) =>
+        {
+            if (ItemFromEvent<SymbolItemViewModel>(e) is not { } item) return;
+            _resultsList.SelectedItem = item;
+            SelectCurrent();
+            e.Handled = true;
+        }, RoutingStrategies.Bubble, handledEventsToo: true);
+        _referencesList.AddHandler(DoubleTappedEvent, (_, e) =>
+        {
+            if (ItemFromEvent<SymbolReferenceItem>(e) is not { } item) return;
+            _referencesList.SelectedItem = item;
+            NavigateToReference(item);
+            e.Handled = true;
+        }, RoutingStrategies.Bubble, handledEventsToo: true);
+        _referencesList.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter && _referencesList.SelectedItem is SymbolReferenceItem reference)
+            {
+                NavigateToReference(reference);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape) { OnCancel?.Invoke(); e.Handled = true; }
+        };
+    }
+
+    private static T? ItemFromEvent<T>(RoutedEventArgs args) where T : class
+    {
+        var source = args.Source as Control;
+        var container = source as ListBoxItem ?? source?.GetVisualAncestors().OfType<ListBoxItem>().FirstOrDefault();
+        return container?.DataContext as T;
+    }
+
+    private void NavigateToReference(SymbolReferenceItem reference)
+    {
+        if (string.IsNullOrEmpty(reference.FilePath))
+        {
+            _referencesStatus.Text = "Source path is unavailable";
+            return;
+        }
+        OnGoToDefinitionRequested?.Invoke(this, new GoToDefinitionEventArgs
+        {
+            FilePath = reference.FilePath,
+            Line = reference.Line,
+            Column = reference.Column,
+            Symbol = (_resultsList.SelectedItem as SymbolItemViewModel)?.Symbol
+        });
     }
 
     private async Task AnalyzeWorkspace()
@@ -578,8 +684,8 @@ public class SymbolSearchWidget : UserControl
         var compilation = await project.GetCompilationAsync();
         if (compilation == null) return;
 
-        var allSymbols = GetAllSymbols(compilation.GlobalNamespace);
-        _totalSymbols = allSymbols.Count();
+        var allSymbols = await Task.Run(() => GetAllSymbols(compilation.Assembly.GlobalNamespace).ToArray());
+        _totalSymbols = allSymbols.Length;
         
         var classCount = allSymbols.Count(s => s.Kind == SymbolKind.NamedType && !s.IsAbstract);
         var methodCount = allSymbols.Count(s => s.Kind == SymbolKind.Method);
@@ -620,10 +726,13 @@ public class SymbolSearchWidget : UserControl
     private async void UpdateSearch()
     {
         _searchCts?.Cancel();
+        _searchCts?.Dispose();
         _searchCts = new CancellationTokenSource();
         var token = _searchCts.Token;
+        _ = FindReferences(null);
+        _results.Clear();
 
-        var query = _searchField.Text;
+        var query = _searchField.Text?.Trim();
         if (string.IsNullOrWhiteSpace(query) || query.Length < 2)
         {
             _results.Clear();
@@ -653,6 +762,7 @@ public class SymbolSearchWidget : UserControl
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                token.ThrowIfCancellationRequested();
                 _results.Clear();
                 foreach (var vm in viewModels)
                     _results.Add(vm);
@@ -675,11 +785,12 @@ public class SymbolSearchWidget : UserControl
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => { _statusText.Text = $"Error: {ex.Message}"; });
+            if (!token.IsCancellationRequested)
+                _statusText.Text = $"Error: {ex.Message}";
         }
         finally
         {
-            _loadingProgress.IsVisible = false;
+            if (!token.IsCancellationRequested) _loadingProgress.IsVisible = false;
         }
     }
 
@@ -687,13 +798,13 @@ public class SymbolSearchWidget : UserControl
     {
         return filter switch
         {
-            SymbolKindFilter.Classes => symbols.Where(s => s.Kind == SymbolKind.NamedType && !s.IsAbstract),
+            SymbolKindFilter.Classes => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Class),
             SymbolKindFilter.Methods => symbols.Where(s => s.Kind == SymbolKind.Method),
             SymbolKindFilter.Properties => symbols.Where(s => s.Kind == SymbolKind.Property),
             SymbolKindFilter.Fields => symbols.Where(s => s.Kind == SymbolKind.Field),
-            //SymbolKindFilter.Interfaces => symbols.Where(s => s.Kind == SymbolKind.Interface),
-            //SymbolKindFilter.Enums => symbols.Where(s => s.Kind == SymbolKind.Enum),
-            //SymbolKindFilter.Structs => symbols.Where(s => s.Kind == SymbolKind.Struct),
+            SymbolKindFilter.Interfaces => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Interface),
+            SymbolKindFilter.Enums => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Enum),
+            SymbolKindFilter.Structs => symbols.OfType<INamedTypeSymbol>().Where(s => s.TypeKind == TypeKind.Struct),
             _ => symbols
         };
     }
@@ -740,15 +851,42 @@ public class SymbolSearchWidget : UserControl
     
     private async Task FindReferences(ISymbol? symbol)
     {
+        _referencesCts?.Cancel();
+        _referencesCts?.Dispose();
+        _referencesCts = new CancellationTokenSource();
+        var token = _referencesCts.Token;
+        _references.Clear();
+        _referencesEmpty.IsVisible = true;
+        _referencesEmpty.Text = symbol == null ? "Select a symbol" : "Searching...";
+        _referencesStatus.Text = symbol == null ? "References" : $"References to {symbol.Name}";
         if (symbol == null) return;
 
         try
         {
-            var project = _workspace.CurrentSolution.Projects.FirstOrDefault();
-            if (project == null) return;
-
-            var references = await SymbolFinder.FindReferencesAsync(symbol, project.Solution);
-            var allReferences = references.SelectMany(r => r.Locations).ToList();
+            var solution = _workspace.CurrentSolution;
+            var references = await SymbolFinder.FindReferencesAsync(symbol, solution, token);
+            var allReferences = references.SelectMany(result => result.Locations)
+                .Where(reference => reference.Location.IsInSource)
+                .DistinctBy(reference => (reference.Document.Id, reference.Location.SourceSpan))
+                .OrderBy(reference => reference.Document.FilePath ?? reference.Document.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(reference => reference.Location.SourceSpan.Start).ToList();
+            var items = new List<SymbolReferenceItem>();
+            foreach (var reference in allReferences)
+            {
+                token.ThrowIfCancellationRequested();
+                var text = await reference.Document.GetTextAsync(token);
+                var span = reference.Location.SourceSpan;
+                var position = text.Lines.GetLinePosition(Math.Clamp(span.Start, 0, text.Length));
+                var preview = text.Lines[position.Line].ToString().Trim();
+                items.Add(new SymbolReferenceItem(reference,
+                    reference.Document.FilePath ?? reference.Location.SourceTree?.FilePath ?? "",
+                    position.Line, position.Character, preview));
+            }
+            token.ThrowIfCancellationRequested();
+            foreach (var item in items) _references.Add(item);
+            _referencesStatus.Text = $"References to {symbol.Name} ({items.Count})";
+            _referencesEmpty.Text = "No references found";
+            _referencesEmpty.IsVisible = items.Count == 0;
 
             OnFindReferencesRequested?.Invoke(this, new FindReferencesEventArgs
             {
@@ -756,9 +894,13 @@ public class SymbolSearchWidget : UserControl
                 References = allReferences
             });
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Error finding references: {ex.Message}");
+            if (token.IsCancellationRequested) return;
+            _referencesStatus.Text = "Reference search failed";
+            _referencesEmpty.Text = ex.Message;
+            _referencesEmpty.IsVisible = true;
         }
     }
     

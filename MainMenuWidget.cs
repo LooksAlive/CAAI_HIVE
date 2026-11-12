@@ -27,14 +27,36 @@ public partial class MainMenuWidget : UserControl
     public event Action<bool>? OnToggleExplorer;
     public event Action<bool>? OnToggleStructure;
     public event Action<bool>? OnToggleWordWrap;
+    public event Action<bool>? OnToggleOutput;
+
+    public void SetOutputVisible(bool visible) => MenuToggleOutput.IsChecked = visible;
 
     public event Action? OnRunProject;
     public event Action? OnRunNoDebug;
     public event Action? OnStepInto;
     public event Action? OnStepOver;
     public event Action? OnToggleBreakpoint;
+    public event Action? OnPauseDebug;
+    public event Action? OnStopDebug;
+    public event Action? OnRestartDebug;
+    public event Action? OnStepOut;
+    public event Action? OnSelectDebugProject;
+    public event Action? OnDebugSettings;
+
+    public void SetDebugState(DebugSessionState state)
+    {
+        var idle = state is DebugSessionState.Idle or DebugSessionState.Faulted;
+        MenuRunProject.Header = state == DebugSessionState.Paused ? "_Continue" : "_Start Debugging";
+        MenuRunProject.IsEnabled = idle || state == DebugSessionState.Paused;
+        MenuRunNoDebug.IsEnabled = MenuDebugProject.IsEnabled = MenuDebugSettings.IsEnabled = idle;
+        MenuDebugPause.IsEnabled = state == DebugSessionState.Running;
+        MenuDebugStop.IsEnabled = !idle;
+        MenuDebugRestart.IsEnabled = state is DebugSessionState.Running or DebugSessionState.Paused;
+        MenuStepInto.IsEnabled = MenuStepOver.IsEnabled = MenuStepOut.IsEnabled = state == DebugSessionState.Paused;
+    }
 
     public event Action? OnOpenSettings;
+    public event Action? OnOpenNuGetManager;
     public event Action? OnOpenAbout;
 
     public MainMenuWidget()
@@ -68,6 +90,7 @@ public partial class MainMenuWidget : UserControl
         MenuToggleExplorer.Click += (s, e) => OnToggleExplorer?.Invoke(MenuToggleExplorer.IsChecked);
         MenuToggleStructure.Click += (s, e) => OnToggleStructure?.Invoke(MenuToggleStructure.IsChecked);
         MenuToggleWordWrap.Click += (s, e) => OnToggleWordWrap?.Invoke(MenuToggleWordWrap.IsChecked);
+        MenuToggleOutput.Click += (s, e) => OnToggleOutput?.Invoke(MenuToggleOutput.IsChecked);
 
         // === Run / Debug Subscriptions ===
         MenuRunProject.Click      += (s, e) => OnRunProject?.Invoke();
@@ -75,8 +98,15 @@ public partial class MainMenuWidget : UserControl
         MenuStepInto.Click        += (s, e) => OnStepInto?.Invoke();
         MenuStepOver.Click        += (s, e) => OnStepOver?.Invoke();
         MenuToggleBreakpoint.Click += (s, e) => OnToggleBreakpoint?.Invoke();
+        MenuDebugPause.Click += (_, _) => OnPauseDebug?.Invoke();
+        MenuDebugStop.Click += (_, _) => OnStopDebug?.Invoke();
+        MenuDebugRestart.Click += (_, _) => OnRestartDebug?.Invoke();
+        MenuStepOut.Click += (_, _) => OnStepOut?.Invoke();
+        MenuDebugProject.Click += (_, _) => OnSelectDebugProject?.Invoke();
+        MenuDebugSettings.Click += (_, _) => OnDebugSettings?.Invoke();
 
         // === Tools / Help Subscriptions ===
+        MenuNuget.Click += (s, e) => OnOpenNuGetManager?.Invoke();
         MenuSettings.Click += (s, e) => OnOpenSettings?.Invoke();
         MenuAbout.Click    += (s, e) => OnOpenAbout?.Invoke();
     }

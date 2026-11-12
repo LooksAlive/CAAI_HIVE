@@ -16,6 +16,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 
@@ -67,7 +68,6 @@ public class OutputPanel : UserControl
     private readonly ScrollViewer _scrollViewer;
     private TextBox _inputBox = null!;
     private StackPanel _toolbarPanel = null!;
-    private readonly MenuItem _contextMenu = null!;
     private Process? _currentProcess;
     private CancellationTokenSource? _cancellationTokenSource;
     private bool _isRunning;
@@ -336,18 +336,18 @@ public class OutputPanel : UserControl
         };
         browseBtn.Click += async (_, _) =>
         {
-            var openDialog = new OpenFileDialog
+            var files = await dialog.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
             {
                 Title = "Select Executable",
-                Filters = new List<FileDialogFilter>
+                AllowMultiple = false,
+                FileTypeFilter = new List<FilePickerFileType>
                 {
-                    new() { Name = "Executable Files", Extensions = { "exe" } },
-                    new() { Name = "All Files", Extensions = { "*" } }
+                    new("Executable Files") { Patterns = new[] { "*.exe" } },
+                    new("All Files") { Patterns = new[] { "*" } }
                 }
-            };
-            var result = await openDialog.ShowAsync(dialog);
-            if (result?.Length > 0)
-                filePathBox.Text = result[0];
+            });
+            if (files.Count > 0)
+                filePathBox.Text = files[0].Path.LocalPath;
         };
 
         filePicker.Children.Add(filePathBox);
@@ -550,6 +550,7 @@ public class OutputPanel : UserControl
             var input = _inputBox.Text;
             if (!string.IsNullOrEmpty(input))
             {
+                CommandEntered?.Invoke(this, input);
                 try
                 {
                     _currentProcess.StandardInput.WriteLine(input);

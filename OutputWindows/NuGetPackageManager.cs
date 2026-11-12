@@ -2,6 +2,7 @@ using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -16,8 +17,6 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using Microsoft.CodeAnalysis;
-
 using NuGet.Common;
 using NuGet.Configuration;
 using NuGet.Protocol;
@@ -35,6 +34,7 @@ public class NuGetPackage : INotifyPropertyChanged
         public string Description { get; set; } = "";
         public string Authors { get; set; } = "";
         public long? Downloads { get; set; }
+        public string InstalledVersion { get; set; } = "";
 
         public bool IsInstalled
         {
@@ -53,84 +53,135 @@ public class NuGetPackage : INotifyPropertyChanged
     
 public class NuGetPackageManager : UserControl
 {
-    private readonly AdhocWorkspace? _workspace;
     private readonly ObservableCollection<NuGetPackage> _packages = new();
+    private readonly ObservableCollection<string> _projectFiles = new();
+    private readonly Dictionary<string, string> _installedVersions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SourceRepository _repository;
     private TextBox _searchBox = null!;
     private ListBox _packageList = null!;
+    private Border _packageDetailsPanel = null!;
+    private TextBlock _packageDetailsTitle = null!;
+    private TextBlock _packageDetailsText = null!;
+    private TextBlock _packageDetailsMeta = null!;
     private ProgressBar _progressBar = null!;
     private TextBlock _statusText = null!;
     private TextBox _versionBox = null!;
+    private ComboBox _projectBox = null!;
+    private Button _searchButton = null!;
+    private Button _refreshButton = null!;
+    private Button _installButton = null!;
+    private Button _uninstallButton = null!;
+    private string? _projectFilePath;
     private bool _isLoading;
+    private CancellationTokenSource? _searchCancellation;
+    private CancellationTokenSource? _detailsCancellation;
 
     public event EventHandler<NuGetPackage>? PackageInstallRequested;
     public event EventHandler<NuGetPackage>? PackageUninstallRequested;
     public event EventHandler<string>? OutputAppended;
-    private WindowNotificationManager notificationManager;
+    private readonly WindowNotificationManager _notificationManager;
 
-    public NuGetPackageManager(WindowNotificationManager _notificationManager, AdhocWorkspace? workspace = null)
+    public NuGetPackageManager(WindowNotificationManager notificationManager, string? projectFolder = null)
     {
-        _workspace = workspace;
-        notificationManager = _notificationManager;
+        _notificationManager = notificationManager;
+        _repository = new SourceRepository(
+            new PackageSource("https://api.nuget.org/v3/index.json"),
+            Repository.Provider.GetCoreV3());
         BuildUI();
-        LoadInstalledPackages();
+        SetProjectFolder(projectFolder);
     }
 
     private void BuildUI()
     {
         var mainGrid = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto, Auto, Auto, *, Auto"),
+            RowDefinitions = new RowDefinitions("Auto, Auto, Auto, Auto, *, Auto, Auto"),
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
             Margin = new Thickness(10)
         };
 
-        // Search panel
+        var projectPanel = CreateProjectPanel();
+        mainGrid.Children.Add(projectPanel);
+        Grid.SetRow(projectPanel, 0);
+
         var searchPanel = CreateSearchPanel();
         mainGrid.Children.Add(searchPanel);
-        Grid.SetRow(searchPanel, 0);
+        Grid.SetRow(searchPanel, 1);
 
         // Action panel
         var actionPanel = CreateActionPanel();
         mainGrid.Children.Add(actionPanel);
-        Grid.SetRow(actionPanel, 1);
+        Grid.SetRow(actionPanel, 2);
 
         // Progress bar
         _progressBar = new ProgressBar
         {
             IsIndeterminate = true,
             IsVisible = false,
-            Height = 20,
-            Margin = new Thickness(0, 5)
+            Height = 3,
+            Margin = new Thickness(0, 2)
         };
         mainGrid.Children.Add(_progressBar);
-        Grid.SetRow(_progressBar, 2);
+        Grid.SetRow(_progressBar, 3);
 
         // Package list
         _packageList = CreatePackageList();
         mainGrid.Children.Add(_packageList);
-        Grid.SetRow(_packageList, 3);
+        Grid.SetRow(_packageList, 4);
+
+        _packageDetailsPanel = CreatePackageDetailsPanel();
+        mainGrid.Children.Add(_packageDetailsPanel);
+        Grid.SetRow(_packageDetailsPanel, 5);
 
         // Status bar
         var statusBar = CreateStatusBar();
         mainGrid.Children.Add(statusBar);
-        Grid.SetRow(statusBar, 4);
+        Grid.SetRow(statusBar, 6);
 
         Content = mainGrid;
     }
 
-    private StackPanel CreateSearchPanel()
+    private StackPanel CreateProjectPanel()
     {
+        _projectBox = new ComboBox
+        {
+            ItemsSource = _projectFiles,
+            MinWidth = 210,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        _projectBox.SelectionChanged += async (_, _) =>
+        {
+            _projectFilePath = _projectBox.SelectedItem as string;
+            await LoadInstalledPackages();
+        };
+
         var panel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 5,
-            Margin = new Thickness(0, 0, 0, 10)
+            Spacing = 6,
+            Margin = new Thickness(0, 0, 0, 6)
+        };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Project:",
+            Foreground = Brushes.Gray,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        panel.Children.Add(_projectBox);
+        return panel;
+    }
+
+    private Grid CreateSearchPanel()
+    {
+        var panel = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto"),
+            Margin = new Thickness(0, 0, 0, 6)
         };
 
         _searchBox = new TextBox
         {
             Watermark = "Search packages (e.g., Newtonsoft.Json)...",
-            Width = 350,
             Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
             Foreground = Brushes.White,
             CaretBrush = Brushes.White
@@ -141,30 +192,32 @@ public class NuGetPackageManager : UserControl
                 SearchPackages();
         };
 
-        var searchBtn = new Button
+        _searchButton = new Button
         {
             Content = "🔍 Search",
             Background = new SolidColorBrush(Color.FromRgb(0, 100, 150)),
             Foreground = Brushes.White,
-            Padding = new Thickness(15, 8),
+            Padding = new Thickness(11, 5),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
-        searchBtn.Click += (_, _) => SearchPackages();
+        _searchButton.Click += (_, _) => SearchPackages();
+        Grid.SetColumn(_searchButton, 1);
 
-        var refreshBtn = new Button
+        _refreshButton = new Button
         {
             Content = "🔄 Refresh Installed",
             Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Foreground = Brushes.White,
-            Padding = new Thickness(10, 8),
+            Padding = new Thickness(9, 5),
             Cursor = new Cursor(StandardCursorType.Hand),
-            Margin = new Thickness(10, 0, 0, 0)
+            Margin = new Thickness(6, 0, 0, 0)
         };
-        refreshBtn.Click += (_, _) => LoadInstalledPackages();
+        _refreshButton.Click += async (_, _) => await LoadInstalledPackages();
+        Grid.SetColumn(_refreshButton, 2);
 
         panel.Children.Add(_searchBox);
-        panel.Children.Add(searchBtn);
-        panel.Children.Add(refreshBtn);
+        panel.Children.Add(_searchButton);
+        panel.Children.Add(_refreshButton);
 
         return panel;
     }
@@ -174,62 +227,48 @@ public class NuGetPackageManager : UserControl
         var panel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 10,
-            Margin = new Thickness(0, 0, 0, 10)
+            Spacing = 6,
+            Margin = new Thickness(0, 0, 0, 6)
         };
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Version",
+            Foreground = Brushes.Gray,
+            VerticalAlignment = VerticalAlignment.Center
+        });
 
         _versionBox = new TextBox
         {
-            Watermark = "Version (e.g., 13.0.3)",
-            Width = 150,
+            Watermark = "Latest",
+            Width = 110,
             Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
             Foreground = Brushes.White
         };
 
-        var installBtn = new Button
+        _installButton = new Button
         {
-            Content = "📦 Install",
-            Background = new SolidColorBrush(Color.FromRgb(0, 120, 0)),
+            Content = "Install",
+            Background = new SolidColorBrush(Color.FromRgb(28, 112, 93)),
             Foreground = Brushes.White,
-            Padding = new Thickness(15, 8),
+            Padding = new Thickness(11, 4),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
-        installBtn.Click += InstallSelectedPackage;
+        _installButton.Click += InstallSelectedPackage;
 
-        var uninstallBtn = new Button
+        _uninstallButton = new Button
         {
-            Content = "🗑️ Uninstall",
-            Background = new SolidColorBrush(Color.FromRgb(120, 0, 0)),
+            Content = "Uninstall",
+            Background = new SolidColorBrush(Color.FromRgb(126, 57, 57)),
             Foreground = Brushes.White,
-            Padding = new Thickness(15, 8),
+            Padding = new Thickness(11, 4),
             Cursor = new Cursor(StandardCursorType.Hand)
         };
-        uninstallBtn.Click += UninstallSelectedPackage;
+        _uninstallButton.Click += UninstallSelectedPackage;
 
-        // Version dropdown with common versions
-        var versionCombo = new ComboBox
-        {
-            Width = 100,
-            Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
-            Foreground = Brushes.White,
-            ItemsSource = new[] { "Latest", "6.0.0", "7.0.0", "8.0.0", "12.0.0", "13.0.3" }
-        };
-        versionCombo.SelectionChanged += (s, e) =>
-        {
-            if (versionCombo.SelectedItem is string version && version != "Latest")
-                _versionBox.Text = version;
-        };
-
-        panel.Children.Add(new TextBlock 
-        { 
-            Text = "Version:", 
-            Foreground = Brushes.Gray, 
-            VerticalAlignment = VerticalAlignment.Center 
-        });
-        panel.Children.Add(versionCombo);
         panel.Children.Add(_versionBox);
-        panel.Children.Add(installBtn);
-        panel.Children.Add(uninstallBtn);
+        panel.Children.Add(_installButton);
+        panel.Children.Add(_uninstallButton);
 
         return panel;
     }
@@ -240,9 +279,15 @@ public class NuGetPackageManager : UserControl
         {
             Background = new SolidColorBrush(Color.FromRgb(25, 25, 30)),
             Foreground = Brushes.White,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
             ItemsSource = _packages,
-            SelectionMode = SelectionMode.Single,
-            //Margin = new Thickness(0, 5)
+            SelectionMode = SelectionMode.Single
+        };
+        list.SelectionChanged += (_, _) =>
+        {
+            UpdateActionButtons();
+            _ = LoadSelectedPackageDetailsAsync();
         };
 
         list.ItemTemplate = new FuncDataTemplate<NuGetPackage>((pkg, _) =>
@@ -252,112 +297,110 @@ public class NuGetPackageManager : UserControl
 
             var border = new Border
             {
-                //Padding = new Thickness(0, 0),
-                //Margin = new Thickness(0, 0, 0, 0),
-                Background = pkg.IsInstalled ? 
-                    new SolidColorBrush(Color.FromArgb(40, 0, 200, 0)) : 
-                    Brushes.Transparent
+                Background = Brushes.Transparent,
+                Padding = new Thickness(4, 3)
             };
 
             var grid = new Grid
             {
-                ColumnDefinitions = new ColumnDefinitions("Auto, *, Auto, Auto")
+                ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto, Auto"),
+                MinHeight = 28
             };
 
-            // Icon
-            var icon = new TextBlock
+            var name = new TextBlock
             {
-                Text = pkg.IsInstalled ? "✅" : "📦",
-                FontSize = 16,
+                Text = pkg.Id,
+                FontSize = 12,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = Brushes.White,
                 VerticalAlignment = VerticalAlignment.Center
             };
 
-            // Package info
-            var infoStack = new StackPanel { Margin = new Thickness(10, 0) };
-            
-            var headerPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
-            headerPanel.Children.Add(new TextBlock
+            var version = new TextBlock
             {
-                Text = pkg.Id,
+                Text = pkg.IsInstalled && !string.IsNullOrEmpty(pkg.InstalledVersion)
+                    ? $"v{pkg.Version} / installed {pkg.InstalledVersion}"
+                    : $"v{pkg.Version}",
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(175, 180, 188)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0),
+                MaxWidth = 240,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(version, 1);
+
+            var downloads = new TextBlock
+            {
+                Text = pkg.Downloads.HasValue ? $"{pkg.Downloads:N0} downloads" : "",
+                FontSize = 10,
+                Foreground = Brushes.Gray,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0),
+                MaxWidth = 130,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            Grid.SetColumn(downloads, 2);
+
+            var status = new TextBlock
+            {
+                Text = pkg.IsInstalled ? "INSTALLED" : "AVAILABLE",
+                FontSize = 9,
                 FontWeight = FontWeight.Bold,
-                FontSize = 13,
-                Foreground = Brushes.White
-            });
-            headerPanel.Children.Add(new TextBlock
-            {
-                Text = pkg.Version,
-                FontSize = 11,
-                Foreground = Brushes.Gray
-            });
-            headerPanel.Children.Add(new TextBlock
-            {
-                Text = $"📥 {pkg.Downloads:N0}",
-                FontSize = 10,
-                Foreground = Brushes.Gray
-            });
-            infoStack.Children.Add(headerPanel);
-
-            infoStack.Children.Add(new TextBlock
-            {
-                Text = pkg.Description,
-                FontSize = 11,
-                Foreground = new SolidColorBrush(Color.FromRgb(180, 180, 180)),
-                TextWrapping = TextWrapping.Wrap,
-                MaxWidth = 500
-            });
-
-            infoStack.Children.Add(new TextBlock
-            {
-                Text = $"by {pkg.Authors}",
-                FontSize = 10,
-                Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
-                FontStyle = FontStyle.Italic
-            });
-
-            // Badge
-            if (pkg.IsInstalled)
-            {
-                var badge = new Border
-                {
-                    Background = new SolidColorBrush(Color.FromRgb(0, 150, 0)),
-                    //CornerRadius = new CornerRadius(10),
-                    //Padding = new Thickness(8, 2),
-                    //Margin = new Thickness(10, 0, 0, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                badge.Child = new TextBlock
-                {
-                    Text = "INSTALLED",
-                    FontSize = 9,
-                    FontWeight = FontWeight.Bold,
-                    Foreground = Brushes.White
-                };
-                grid.Children.Add(badge);
-                Grid.SetColumn(badge, 2);
-            }
-
-            grid.Children.Add(icon);
-            Grid.SetColumn(icon, 0);
-            grid.Children.Add(infoStack);
-            Grid.SetColumn(infoStack, 1);
-
-            // Hover effect
-            border.PointerEntered += (_, _) =>
-            {
-                if (!pkg.IsInstalled)
-                    border.Background = new SolidColorBrush(Color.FromArgb(50, 100, 100, 100));
+                Foreground = pkg.IsInstalled
+                    ? new SolidColorBrush(Color.FromRgb(133, 214, 174))
+                    : new SolidColorBrush(Color.FromRgb(159, 166, 177)),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 2, 0)
             };
-            border.PointerExited += (_, _) =>
-            {
-                if (!pkg.IsInstalled)
-                    border.Background = Brushes.Transparent;
-            };
+            Grid.SetColumn(status, 3);
 
+            grid.Children.Add(name);
+            grid.Children.Add(version);
+            grid.Children.Add(downloads);
+            grid.Children.Add(status);
             border.Child = grid;
             return border;
         });
 
         return list;
+    }
+
+    private Border CreatePackageDetailsPanel()
+    {
+        _packageDetailsTitle = new TextBlock
+        {
+            FontSize = 12,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = Brushes.White
+        };
+        _packageDetailsText = new TextBlock
+        {
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.FromRgb(190, 194, 201)),
+            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxHeight = 38
+        };
+        _packageDetailsMeta = new TextBlock
+        {
+            FontSize = 10,
+            Foreground = Brushes.Gray
+        };
+
+        var content = new StackPanel { Spacing = 3 };
+        content.Children.Add(_packageDetailsTitle);
+        content.Children.Add(_packageDetailsText);
+        content.Children.Add(_packageDetailsMeta);
+
+        return new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 62)),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(6, 8, 6, 4),
+            IsVisible = false,
+            Child = content
+        };
     }
 
     private Border CreateStatusBar()
@@ -383,158 +426,259 @@ public class NuGetPackageManager : UserControl
 
     private async void SearchPackages()
     {
+        if (_isLoading)
+            return;
+
         var searchTerm = _searchBox.Text;
-        if (string.IsNullOrWhiteSpace(searchTerm)) return;
+        if (string.IsNullOrWhiteSpace(searchTerm))
+        {
+            _statusText.Text = "Enter a package name or keyword to search.";
+            _statusText.Foreground = Brushes.Orange;
+            return;
+        }
 
         await SearchNuGetPackages(searchTerm);
+    }
+
+    public string? ProjectFilePath => _projectFilePath;
+
+    public void SetProjectFolder(string? folderPath)
+    {
+        _projectFiles.Clear();
+        _projectFilePath = null;
+
+        if (!string.IsNullOrWhiteSpace(folderPath) && Directory.Exists(folderPath))
+        {
+            try
+            {
+                foreach (var projectFile in Directory.EnumerateFiles(
+                             folderPath, "*.csproj", SearchOption.AllDirectories)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                {
+                    _projectFiles.Add(Path.GetFullPath(projectFile));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _statusText.Text = $"Could not inspect project folder: {ex.Message}";
+                _statusText.Foreground = Brushes.Red;
+                return;
+            }
+        }
+
+        if (_projectFiles.Count == 1)
+        {
+            _projectBox.SelectedItem = _projectFiles[0];
+            return;
+        }
+
+        _projectBox.SelectedItem = null;
+        _installButton.IsEnabled = false;
+        _uninstallButton.IsEnabled = false;
+        _refreshButton.IsEnabled = false;
+        _packages.Clear();
+        _installedVersions.Clear();
+
+        _statusText.Text = _projectFiles.Count == 0
+            ? "No .csproj found. Select a project folder to manage packages."
+            : "Select a .csproj to manage its packages.";
+        _statusText.Foreground = Brushes.Gray;
     }
 
     public async Task InstallPackage(string project,
                                  string id,
                                  string version)
     {
-        var psi = new ProcessStartInfo
+        var arguments = new List<string> { "add", Path.GetFullPath(project), "package", id };
+        if (!string.IsNullOrWhiteSpace(version) && !string.Equals(version, "latest", StringComparison.OrdinalIgnoreCase))
         {
-            FileName = "dotnet",
-            Arguments =
-                $"add \"{project}\" package {id} --version {version}",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
+            if (!NuGetVersion.TryParse(version, out _))
+                throw new ArgumentException($"'{version}' is not a valid NuGet version.", nameof(version));
 
-        using var process = Process.Start(psi);
-        if(process == null)
-        {
-            ShowNotification("Installation error", "Installation raised an error", NotificationType.Error);
-            return;
+            arguments.Add("--version");
+            arguments.Add(version);
         }
 
-        await process.WaitForExitAsync();
-        ShowNotification("Install completed", "Install completed successfully");
+        await RunDotnetAsync(Path.GetDirectoryName(Path.GetFullPath(project))!, arguments);
     }
 
     public async Task<List<NuGetPackage>> GetInstalledPackages(string projectFile)
     {
-        var doc = XDocument.Load(projectFile);
-
-        return doc.Descendants("PackageReference")
-                .Select(x => new NuGetPackage
-                {
-                    Id = x.Attribute("Include")?.Value ?? "",
-                    Version = x.Attribute("Version")?.Value ?? "",
-                    IsInstalled = true
-                })
-                .ToList();
+        return await Task.Run(() => ReadInstalledPackages(projectFile));
     }
 
-    private SourceRepository _repository;
-
-    public void todocosntructor()
+    private static List<NuGetPackage> ReadInstalledPackages(string projectFile)
     {
-        var providers = Repository.Provider.GetCoreV3();
+        var projectPath = Path.GetFullPath(projectFile);
+        var projectDocument = XDocument.Load(projectPath);
+        var centralVersions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var directory = new DirectoryInfo(Path.GetDirectoryName(projectPath)!);
 
-        _repository = new SourceRepository(
-            new PackageSource("https://api.nuget.org/v3/index.json"),
-            providers);
+        while (directory is not null)
+        {
+            var centralFile = Path.Combine(directory.FullName, "Directory.Packages.props");
+            if (File.Exists(centralFile))
+            {
+                foreach (var packageVersion in XDocument.Load(centralFile).Descendants()
+                             .Where(element => element.Name.LocalName == "PackageVersion"))
+                {
+                    var id = packageVersion.Attribute("Include")?.Value;
+                    var version = packageVersion.Attribute("Version")?.Value
+                                  ?? packageVersion.Elements().FirstOrDefault(element => element.Name.LocalName == "Version")?.Value;
+                    if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(version))
+                        centralVersions[id] = version;
+                }
+
+                break;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return projectDocument.Descendants()
+            .Where(element => element.Name.LocalName == "PackageReference")
+            .Select(element =>
+            {
+                var id = element.Attribute("Include")?.Value ?? element.Attribute("Update")?.Value;
+                if (string.IsNullOrWhiteSpace(id))
+                    return null;
+
+                var version = element.Attribute("Version")?.Value
+                              ?? element.Attribute("VersionOverride")?.Value
+                              ?? element.Elements().FirstOrDefault(child => child.Name.LocalName == "Version")?.Value;
+                if (string.IsNullOrWhiteSpace(version))
+                    centralVersions.TryGetValue(id, out version);
+
+                return new NuGetPackage
+                {
+                    Id = id,
+                    Version = version ?? "Version managed by project",
+                    InstalledVersion = version ?? "Version managed by project",
+                    IsInstalled = true
+                };
+            })
+            .Where(package => package is not null)
+            .Cast<NuGetPackage>()
+            .GroupBy(package => package.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
     }
 
     public async Task<List<NuGetPackage>> SearchAsync(string search)
     {
-        var resource =
-            await _repository.GetResourceAsync<PackageSearchResource>();
+        return await SearchAsync(search, CancellationToken.None);
+    }
 
-        var results =
-            await resource.SearchAsync(
-                search,
-                new SearchFilter(false),
-                0,
-                50,
-                NullLogger.Instance,
-                CancellationToken.None);
+    private async Task<List<NuGetPackage>> SearchAsync(string search, CancellationToken cancellationToken)
+    {
+        var resource = await _repository.GetResourceAsync<PackageSearchResource>();
+        var results = await resource.SearchAsync(
+            search,
+            new SearchFilter(includePrerelease: false),
+            skip: 0,
+            take: 50,
+            NullLogger.Instance,
+            cancellationToken);
 
-        return results.Select(p => new NuGetPackage
+        return results.Select(result => new NuGetPackage
         {
-            Id = p.Identity.Id,
-            Version = p.Identity.Version.ToNormalizedString(),
-            Description = p.Description,
-            Authors = string.Join(", ", p.Authors),
-            Downloads = p.DownloadCount
+            Id = result.Identity.Id,
+            Version = result.Identity.Version.ToNormalizedString(),
+            Description = result.Description ?? "",
+            Authors = string.Join(", ", result.Authors),
+            Downloads = result.DownloadCount,
+            IsInstalled = _installedVersions.TryGetValue(result.Identity.Id, out var installedVersion),
+            InstalledVersion = installedVersion ?? ""
         }).ToList();
     }
 
     private async Task SearchNuGetPackages(string searchTerm)
     {
+        _searchCancellation?.Cancel();
+        _searchCancellation?.Dispose();
+        _searchCancellation = new CancellationTokenSource();
         _isLoading = true;
-        _progressBar.IsVisible = true;
+        SetBusy(true);
         _statusText.Text = $"Searching for '{searchTerm}'...";
         _statusText.Foreground = Brushes.Yellow;
         _packages.Clear();
 
         try
         {
-            // Simulate async search - replace with actual NuGet API
-            var results = await Task.Run(() => SearchNuGetPackagesAsync(searchTerm));
-            
-            Dispatcher.UIThread.Post(() =>
-            {
-                foreach (var pkg in results)
-                    _packages.Add(pkg);
-                
-                _statusText.Text = $"Found {_packages.Count} packages matching '{searchTerm}'";
-                _statusText.Foreground = Brushes.LightGreen;
-                _progressBar.IsVisible = false;
-                _isLoading = false;
-            });
+            var results = await SearchAsync(searchTerm, _searchCancellation.Token);
+            foreach (var package in results)
+                _packages.Add(package);
+
+            _statusText.Text = $"Found {_packages.Count} packages matching '{searchTerm}'.";
+            _statusText.Foreground = Brushes.LightGreen;
+        }
+        catch (OperationCanceledException)
+        {
+            _statusText.Text = "Search canceled.";
+            _statusText.Foreground = Brushes.Gray;
         }
         catch (Exception ex)
         {
-            Dispatcher.UIThread.Post(() =>
-            {
-                _statusText.Text = $"Error: {ex.Message}";
-                _statusText.Foreground = Brushes.Red;
-                _progressBar.IsVisible = false;
-                _isLoading = false;
-            });
+            _statusText.Text = $"NuGet search failed: {ex.Message}";
+            _statusText.Foreground = Brushes.Red;
+        }
+        finally
+        {
+            _isLoading = false;
+            SetBusy(false);
         }
     }
 
-    private void LoadInstalledPackages()
+    private async Task LoadInstalledPackages()
     {
-        // Load packages from project (simplified - would read from .csproj)
-        // For demo, we'll add some sample installed packages
         _packages.Clear();
-        
-        var installed = new[]
-        {
-            new NuGetPackage 
-            {
-                Id = "Avalonia", 
-                Version = "11.0.0", 
-                Description = "Cross-platform UI framework for .NET",
-                Authors = "Avalonia Team",
-                Downloads = 5000000,
-                IsInstalled = true
-            },
-            new NuGetPackage 
-            { 
-                Id = "Microsoft.CodeAnalysis.CSharp", 
-                Version = "4.8.0", 
-                Description = "C# compiler and code analysis APIs",
-                Authors = "Microsoft",
-                Downloads = 15000000,
-                IsInstalled = true
-            }
-        };
-        
-        foreach (var pkg in installed)
-            _packages.Add(pkg);
+        _installedVersions.Clear();
+        var hasProject = !string.IsNullOrWhiteSpace(_projectFilePath) && File.Exists(_projectFilePath);
+        _installButton.IsEnabled = hasProject;
+        _uninstallButton.IsEnabled = hasProject;
+        _refreshButton.IsEnabled = hasProject;
 
-        _statusText.Text = $"Loaded {_packages.Count} installed packages";
-        _statusText.Foreground = Brushes.Gray;
+        if (!hasProject)
+        {
+            _statusText.Text = "Select a .csproj to manage its packages.";
+            _statusText.Foreground = Brushes.Gray;
+            return;
+        }
+
+        _isLoading = true;
+        SetBusy(true);
+        _statusText.Text = $"Reading {_projectFilePath}...";
+        _statusText.Foreground = Brushes.Yellow;
+
+        try
+        {
+            var installed = await GetInstalledPackages(_projectFilePath!);
+            foreach (var package in installed)
+            {
+                _installedVersions[package.Id] = package.InstalledVersion;
+                _packages.Add(package);
+            }
+
+            _statusText.Text = $"Loaded {_packages.Count} direct package references.";
+            _statusText.Foreground = Brushes.Gray;
+        }
+        catch (Exception ex)
+        {
+            _statusText.Text = $"Could not read project packages: {ex.Message}";
+            _statusText.Foreground = Brushes.Red;
+        }
+        finally
+        {
+            _isLoading = false;
+            SetBusy(false);
+        }
     }
 
     private async void InstallSelectedPackage(object? sender, RoutedEventArgs e)
     {
+        if (_isLoading)
+            return;
+
         if (_packageList.SelectedItem is not NuGetPackage package) return;
         if (package.IsInstalled)
         {
@@ -543,43 +687,55 @@ public class NuGetPackageManager : UserControl
             return;
         }
 
-        var version = _versionBox.Text;
-        if (string.IsNullOrWhiteSpace(version))
-            version = "latest";
+        if (string.IsNullOrWhiteSpace(_projectFilePath) || !File.Exists(_projectFilePath))
+        {
+            _statusText.Text = "Select a valid .csproj before installing packages.";
+            _statusText.Foreground = Brushes.Orange;
+            return;
+        }
+
+        var version = string.IsNullOrWhiteSpace(_versionBox.Text) ? "latest" : _versionBox.Text.Trim();
+        if (version != "latest" && !NuGetVersion.TryParse(version, out _))
+        {
+            _statusText.Text = $"'{version}' is not a valid NuGet version.";
+            _statusText.Foreground = Brushes.Orange;
+            return;
+        }
 
         _isLoading = true;
-        _progressBar.IsVisible = true;
+        SetBusy(true);
         _statusText.Text = $"Installing {package.Id} version {version}...";
         _statusText.Foreground = Brushes.Yellow;
 
         try
         {
-            // Simulate install - replace with actual NuGet install
-            await Task.Delay(2000);
-            
+            await InstallPackage(_projectFilePath, package.Id, version);
             package.IsInstalled = true;
-            package.Version = version == "latest" ? "1.0.0" : version;
-            
-            _statusText.Text = $"✅ Successfully installed {package.Id}";
+            package.InstalledVersion = version == "latest" ? package.Version : version;
+            _statusText.Text = $"Installed {package.Id} {package.InstalledVersion}.";
             _statusText.Foreground = Brushes.LightGreen;
-            
             PackageInstallRequested?.Invoke(this, package);
-            OutputAppended?.Invoke(this, $"Installed {package.Id} version {version}");
+            OutputAppended?.Invoke(this, $"Installed {package.Id} version {package.InstalledVersion} into {_projectFilePath}");
+            await LoadInstalledPackages();
         }
         catch (Exception ex)
         {
-            _statusText.Text = $"❌ Failed to install {package.Id}: {ex.Message}";
+            _statusText.Text = $"Failed to install {package.Id}: {ex.Message}";
             _statusText.Foreground = Brushes.Red;
+            OutputAppended?.Invoke(this, _statusText.Text);
         }
         finally
         {
-            _progressBar.IsVisible = false;
             _isLoading = false;
+            SetBusy(false);
         }
     }
 
     private async void UninstallSelectedPackage(object? sender, RoutedEventArgs e)
     {
+        if (_isLoading)
+            return;
+
         if (_packageList.SelectedItem is not NuGetPackage package) return;
         if (!package.IsInstalled)
         {
@@ -588,39 +744,173 @@ public class NuGetPackageManager : UserControl
             return;
         }
 
-        // Confirm uninstall
-        var confirm = await ShowConfirmDialog("Confirm Uninstall", 
+        if (string.IsNullOrWhiteSpace(_projectFilePath) || !File.Exists(_projectFilePath))
+        {
+            _statusText.Text = "Select a valid .csproj before uninstalling packages.";
+            _statusText.Foreground = Brushes.Orange;
+            return;
+        }
+
+        var confirm = await ShowConfirmDialog("Confirm Uninstall",
             $"Are you sure you want to uninstall {package.Id}?");
-        
-        if (!confirm) return;
+
+        if (!confirm || _isLoading) return;
 
         _isLoading = true;
-        _progressBar.IsVisible = true;
+        SetBusy(true);
         _statusText.Text = $"Uninstalling {package.Id}...";
         _statusText.Foreground = Brushes.Yellow;
 
         try
         {
-            // Simulate uninstall
-            await Task.Delay(1500);
-            
+            await RunDotnetAsync(
+                Path.GetDirectoryName(_projectFilePath)!,
+                new[] { "remove", _projectFilePath, "package", package.Id });
             package.IsInstalled = false;
-            
-            _statusText.Text = $"🗑️ Successfully uninstalled {package.Id}";
+
+            _statusText.Text = $"Uninstalled {package.Id}.";
             _statusText.Foreground = Brushes.LightGreen;
-            
             PackageUninstallRequested?.Invoke(this, package);
-            OutputAppended?.Invoke(this, $"Uninstalled {package.Id}");
+            OutputAppended?.Invoke(this, $"Uninstalled {package.Id} from {_projectFilePath}");
+            await LoadInstalledPackages();
         }
         catch (Exception ex)
         {
-            _statusText.Text = $"❌ Failed to uninstall {package.Id}: {ex.Message}";
+            _statusText.Text = $"Failed to uninstall {package.Id}: {ex.Message}";
             _statusText.Foreground = Brushes.Red;
+            OutputAppended?.Invoke(this, _statusText.Text);
         }
         finally
         {
-            _progressBar.IsVisible = false;
             _isLoading = false;
+            SetBusy(false);
+        }
+    }
+
+    private async Task RunDotnetAsync(string workingDirectory, IEnumerable<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "dotnet",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the dotnet CLI. Ensure the .NET SDK is installed and on PATH.");
+
+        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+        var standardErrorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var standardOutput = await standardOutputTask;
+        var standardError = await standardErrorTask;
+
+        if (process.ExitCode != 0)
+        {
+            var details = string.IsNullOrWhiteSpace(standardError) ? standardOutput : standardError;
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(details)
+                    ? $"dotnet exited with code {process.ExitCode}."
+                    : details.Trim());
+        }
+    }
+
+    private void SetBusy(bool isBusy)
+    {
+        _progressBar.IsVisible = isBusy;
+        _searchButton.IsEnabled = !isBusy;
+        _projectBox.IsEnabled = !isBusy;
+
+        var hasProject = !string.IsNullOrWhiteSpace(_projectFilePath) && File.Exists(_projectFilePath);
+        _refreshButton.IsEnabled = !isBusy && hasProject;
+        UpdateActionButtons();
+    }
+
+    private void UpdateActionButtons()
+    {
+        var hasProject = !string.IsNullOrWhiteSpace(_projectFilePath) && File.Exists(_projectFilePath);
+        var selectedPackage = _packageList.SelectedItem as NuGetPackage;
+        var canAct = !_isLoading && hasProject && selectedPackage is not null;
+        _installButton.IsEnabled = canAct && !selectedPackage!.IsInstalled;
+        _uninstallButton.IsEnabled = canAct && selectedPackage!.IsInstalled;
+
+        UpdatePackageDetails(selectedPackage);
+    }
+
+    private void UpdatePackageDetails(NuGetPackage? selectedPackage)
+    {
+        _packageDetailsPanel.IsVisible = selectedPackage is not null;
+        if (selectedPackage is not null)
+        {
+            _packageDetailsTitle.Text = $"{selectedPackage.Id}  v{selectedPackage.Version}";
+            _packageDetailsText.Text = string.IsNullOrWhiteSpace(selectedPackage.Description)
+                ? "Package information is loading..."
+                : selectedPackage.Description;
+            _packageDetailsMeta.Text = string.Join("  |  ", new[]
+            {
+                string.IsNullOrWhiteSpace(selectedPackage.Authors) ? null : selectedPackage.Authors,
+                selectedPackage.Downloads.HasValue ? $"{selectedPackage.Downloads:N0} downloads" : null,
+                selectedPackage.IsInstalled ? $"Installed: {selectedPackage.InstalledVersion}" : "Not installed"
+            }.Where(value => value is not null));
+        }
+    }
+
+    private async Task LoadSelectedPackageDetailsAsync()
+    {
+        _detailsCancellation?.Cancel();
+        _detailsCancellation?.Dispose();
+        _detailsCancellation = null;
+
+        if (_packageList.SelectedItem is not NuGetPackage package ||
+            !string.IsNullOrWhiteSpace(package.Description))
+            return;
+
+        var cancellation = new CancellationTokenSource();
+        _detailsCancellation = cancellation;
+        UpdatePackageDetails(package);
+
+        try
+        {
+            var resource = await _repository.GetResourceAsync<PackageMetadataResource>();
+            using var cacheContext = new SourceCacheContext();
+            var metadata = await resource.GetMetadataAsync(
+                package.Id,
+                includePrerelease: false,
+                includeUnlisted: false,
+                cacheContext,
+                NullLogger.Instance,
+                cancellation.Token);
+            var packageMetadata = metadata.FirstOrDefault(item =>
+                                      string.Equals(item.Identity.Version.ToNormalizedString(), package.Version, StringComparison.OrdinalIgnoreCase))
+                                  ?? metadata.FirstOrDefault();
+
+            if (cancellation.IsCancellationRequested || _packageList.SelectedItem != package)
+                return;
+
+            if (packageMetadata is not null)
+            {
+                package.Description = packageMetadata.Description ?? "";
+                package.Authors = packageMetadata.Authors ?? "";
+                package.Downloads = packageMetadata.DownloadCount;
+            }
+
+            UpdatePackageDetails(package);
+            if (string.IsNullOrWhiteSpace(package.Description))
+                _packageDetailsText.Text = "No description is available for this package.";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch
+        {
+            if (!cancellation.IsCancellationRequested && _packageList.SelectedItem == package)
+                _packageDetailsText.Text = "Package information could not be loaded.";
         }
     }
 
@@ -658,7 +948,10 @@ public class NuGetPackageManager : UserControl
         panel.Children.Add(buttonPanel);
         dialog.Content = panel;
         
-        await dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
+        if (this.GetVisualRoot() is not Window owner)
+            return false;
+
+        await dialog.ShowDialog(owner);
         return result;
     }
 
@@ -675,24 +968,6 @@ public class NuGetPackageManager : UserControl
         );
 
         // Send to the manager screen container
-        notificationManager.Show(toast);
-    }
-
-    // Simulated NuGet search - replace with actual NuGet.Protocol API
-    private Task<List<NuGetPackage>> SearchNuGetPackagesAsync(string term)
-    {
-        return Task.FromResult(new List<NuGetPackage>
-        {
-            new NuGetPackage { Id = "Newtonsoft.Json", Version = "13.0.3", Description = "Popular high-performance JSON framework for .NET", Authors = "James Newton-King", Downloads = 800000000, IsInstalled = false },
-            new NuGetPackage { Id = "Avalonia", Version = "11.0.0", Description = "Cross-platform UI framework for .NET", Authors = "Avalonia Team", Downloads = 5000000, IsInstalled = false },
-            new NuGetPackage { Id = "Microsoft.CodeAnalysis.CSharp", Version = "4.8.0", Description = "C# compiler and code analysis APIs", Authors = "Microsoft", Downloads = 15000000, IsInstalled = false },
-            new NuGetPackage { Id = "Serilog", Version = "3.1.1", Description = "Simple .NET logging with fully-structured events", Authors = "Serilog Contributors", Downloads = 120000000, IsInstalled = false },
-            new NuGetPackage { Id = "AutoMapper", Version = "12.0.0", Description = "Convention-based object-object mapper", Authors = "Jimmy Bogard", Downloads = 250000000, IsInstalled = false },
-            new NuGetPackage { Id = "FluentValidation", Version = "11.8.0", Description = "Validation library for .NET", Authors = "Jeremy Skinner", Downloads = 80000000, IsInstalled = false },
-            new NuGetPackage { Id = "Dapper", Version = "2.1.24", Description = "Simple object mapper for .NET", Authors = "Stack Overflow", Downloads = 150000000, IsInstalled = false },
-            new NuGetPackage { Id = "MediatR", Version = "12.1.1", Description = "Mediator pattern implementation", Authors = "Jimmy Bogard", Downloads = 40000000, IsInstalled = false },
-            new NuGetPackage { Id = "Polly", Version = "8.2.0", Description = "Resilience and transient-fault-handling library", Authors = "App vNext", Downloads = 60000000, IsInstalled = false }
-        }.Where(p => p.Id.Contains(term, StringComparison.OrdinalIgnoreCase) ||
-                     p.Description.Contains(term, StringComparison.OrdinalIgnoreCase)).ToList());
+        _notificationManager.Show(toast);
     }
 }

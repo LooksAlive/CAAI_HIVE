@@ -8,11 +8,12 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Input;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.FindSymbols;
 using System.Text.Json;
+using System.Globalization;
 using Avalonia.Controls.Primitives;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Avalonia.Platform.Storage;
 
 namespace CAAI;
 
@@ -93,6 +94,7 @@ public class EnvironmentWidget : UserControl
     private TextBox _searchBox = null!;
     private ComboBox _typeFilter = null!;
     private TextBlock _statusText = null!;
+    private TextBlock _entityCount = null!;
     private Border _detailsPanel = null!;
     private ContextMenu _contextMenu = null!;
 
@@ -103,8 +105,10 @@ public class EnvironmentWidget : UserControl
     {
         _workspace = workspace;
         BuildUI();
+        _entities.CollectionChanged += (_, _) => ApplyFilter();
         SetupKeyboardHandling();
         BuildContextMenu();
+        _entityTree.ContextMenu = _contextMenu;
         AddDefaultEntities();
     }
 
@@ -147,23 +151,15 @@ public class EnvironmentWidget : UserControl
 
         var headerGrid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto,Auto")
-        };
-
-        var title = new TextBlock
-        {
-            Text = "🔧 Environment",
-            FontWeight = FontWeight.Bold,
-            FontSize = 14,
-            Foreground = Brushes.White,
-            VerticalAlignment = VerticalAlignment.Center
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            RowDefinitions = new RowDefinitions("Auto,Auto")
         };
 
         _searchBox = new TextBox
         {
             Watermark = "Search entities...",
-            Width = 200,
-            Margin = new Thickness(10, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Margin = new Thickness(0, 8, 0, 0),
             Background = new SolidColorBrush(Color.FromRgb(55, 55, 60)),
             Foreground = Brushes.White
         };
@@ -174,7 +170,7 @@ public class EnvironmentWidget : UserControl
         {
             Orientation = Orientation.Horizontal,
             Spacing = 5,
-            Margin = new Thickness(10, 0, 5, 0)
+            Margin = new Thickness(0)
         };
 
         var exportBtn = CreateIconButton("💾", "Export environment (Ctrl+E)");
@@ -195,23 +191,21 @@ public class EnvironmentWidget : UserControl
         moreBtn.Click += (_, _) => ShowContextMenu(moreBtn);
         actionsPanel.Children.Add(moreBtn);
 
-        headerGrid.Children.Add(title);
-        Grid.SetColumn(title, 0);
         headerGrid.Children.Add(_searchBox);
-        Grid.SetColumn(_searchBox, 1);
+        Grid.SetRow(_searchBox, 1);
+        Grid.SetColumnSpan(_searchBox, 2);
         headerGrid.Children.Add(actionsPanel);
-        Grid.SetColumn(actionsPanel, 2);
+        Grid.SetColumnSpan(actionsPanel, 2);
 
         header.Child = headerGrid;
         return header;
     }
 
-    private StackPanel BuildToolbar()
+    private WrapPanel BuildToolbar()
     {
-        var toolbar = new StackPanel
+        var toolbar = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
             Margin = new Thickness(10, 8)
         };
 
@@ -286,10 +280,14 @@ public class EnvironmentWidget : UserControl
             Foreground = Brushes.White,
             BorderThickness = new Thickness(0),
             Padding = new Thickness(6, 4),
+            Width = 30,
+            Height = 30,
             FontSize = 16,
             Cursor = new Cursor(StandardCursorType.Hand),
             //ToolTip = tooltip
         };
+        ToolTip.SetTip(btn, tooltip);
+        Avalonia.Automation.AutomationProperties.SetName(btn, tooltip);
 
         // Hover effect
         btn.PointerEntered += (_, _) =>
@@ -304,7 +302,7 @@ public class EnvironmentWidget : UserControl
     {
         var splitter = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,4,280")
+            RowDefinitions = new RowDefinitions("*,4,160")
         };
 
         // Entity tree with context menu
@@ -320,16 +318,17 @@ public class EnvironmentWidget : UserControl
         _entityTree.DoubleTapped += OnEntityDoubleTapped;
         _entityTree.PointerPressed += OnEntityTreePointerPressed;
 
-        var treeContainer = new ScrollViewer
+        var treeContainer = new Border
         {
-            Content = _entityTree,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            Child = _entityTree
         };
 
         // Splitter
         var treeSplitter = new GridSplitter
         {
-            Width = 4,
+            Height = 4,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            ResizeDirection = GridResizeDirection.Rows,
             Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             ResizeBehavior = GridResizeBehavior.PreviousAndNext
         };
@@ -338,11 +337,11 @@ public class EnvironmentWidget : UserControl
         _detailsPanel = BuildDetailsPanel();
 
         splitter.Children.Add(treeContainer);
-        Grid.SetColumn(treeContainer, 0);
+        Grid.SetRow(treeContainer, 0);
         splitter.Children.Add(treeSplitter);
-        Grid.SetColumn(treeSplitter, 1);
+        Grid.SetRow(treeSplitter, 1);
         splitter.Children.Add(_detailsPanel);
-        Grid.SetColumn(_detailsPanel, 2);
+        Grid.SetRow(_detailsPanel, 2);
 
         return splitter;
     }
@@ -370,7 +369,7 @@ public class EnvironmentWidget : UserControl
 
         var detailsText = new TextBlock
         {
-            Text = "Select an entity to view details\n\n📘 Add Symbol: Ctrl+Shift+S\n📄 Add File: Ctrl+Shift+F\n📊 Add Data: Ctrl+Shift+D\n📁 Add Folder: Ctrl+Shift+G\n\nDelete: Remove selected\nCtrl+Shift+X: Clear all\nCtrl+E: Export\nCtrl+I: Import",
+            Text = "No entity selected",
             Foreground = Brushes.Gray,
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap
@@ -397,11 +396,12 @@ public class EnvironmentWidget : UserControl
         _statusText = new TextBlock
         {
             Text = "Ready",
+            TextTrimming = TextTrimming.CharacterEllipsis,
             FontSize = 11,
             Foreground = Brushes.Gray
         };
 
-        var entityCount = new TextBlock
+        _entityCount = new TextBlock
         {
             Text = $"{_entities.Count} entities",
             FontSize = 10,
@@ -410,8 +410,8 @@ public class EnvironmentWidget : UserControl
 
         statusGrid.Children.Add(_statusText);
         Grid.SetColumn(_statusText, 0);
-        statusGrid.Children.Add(entityCount);
-        Grid.SetColumn(entityCount, 1);
+        statusGrid.Children.Add(_entityCount);
+        Grid.SetColumn(_entityCount, 1);
 
         statusBar.Child = statusGrid;
         return statusBar;
@@ -817,7 +817,7 @@ public class EnvironmentWidget : UserControl
                 {
                     Name = reference.Display?.Split(',').First() ?? "Reference",
                     Type = EntityType.File,
-                    Description = reference.Display
+                    Description = reference.Display ?? ""
                 });
             }
 
@@ -828,75 +828,44 @@ public class EnvironmentWidget : UserControl
 
     private async void ShowAddSymbolDialog()
     {
-        var dialog = new Window
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        try
         {
-            Title = "Add Symbol",
-            Width = 400,
-            Height = 150,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Background = new SolidColorBrush(Color.FromRgb(35, 35, 40))
-        };
-
-        var panel = new StackPanel { Margin = new Thickness(20), Spacing = 10 };
-
-        panel.Children.Add(new TextBlock { Text = "Enter symbol name to add:", Foreground = Brushes.White });
-
-        var input = new TextBox { Watermark = "Type symbol name..." };
-        panel.Children.Add(input);
-
-        var buttonPanel = new StackPanel
+            var symbol = await DialogHelper.ShowSymbolSearchDialog(owner, _workspace);
+            if (symbol != null) AddSymbolEntity(symbol);
+        }
+        catch (Exception exception)
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 10,
-            HorizontalAlignment = HorizontalAlignment.Right
-        };
-        var okBtn = new Button { Content = "Add", Background = new SolidColorBrush(Color.FromRgb(0, 100, 0)), Foreground = Brushes.White };
-        var cancelBtn = new Button { Content = "Cancel", Background = new SolidColorBrush(Color.FromRgb(100, 0, 0)), Foreground = Brushes.White };
-
-        buttonPanel.Children.Add(okBtn);
-        buttonPanel.Children.Add(cancelBtn);
-        panel.Children.Add(buttonPanel);
-
-        dialog.Content = panel;
-
-        okBtn.Click += async (_, _) =>
-        {
-            await TryAddSymbol(input.Text);
-            dialog.Close();
-        };
-
-        cancelBtn.Click += (_, _) => dialog.Close();
-
-        await dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
+            UpdateStatus($"Symbol search failed: {exception.Message}", true);
+        }
     }
 
-    private void ShowAddFileDialog()
+    private async void ShowAddFileDialog()
     {
-        var dialog = new OpenFileDialog
+        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (storageProvider is null)
+            return;
+
+        var files = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Select File",
             AllowMultiple = true
-        };
-
-        dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window()).ContinueWith(t =>
-        {
-            if (t.Result != null)
-            {
-                foreach (var file in t.Result)
-                {
-                    Dispatcher.UIThread.Post(() => AddFileEntity(file));
-                }
-            }
         });
+
+        foreach (var file in files)
+            AddFileEntity(file.Path.LocalPath);
     }
 
     private void ShowAddDataDialog()
     {
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
         var dialog = new Window
         {
             Title = "Add Data",
             Width = 400,
-            Height = 250,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            ShowInTaskbar = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Background = new SolidColorBrush(Color.FromRgb(35, 35, 40))
         };
@@ -914,10 +883,13 @@ public class EnvironmentWidget : UserControl
         panel.Children.Add(new TextBlock { Text = "Data Type:", Foreground = Brushes.White });
         var typeCombo = new ComboBox
         {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             ItemsSource = new[] { "String", "Integer", "Double", "Boolean", "JSON" },
             SelectedIndex = 0
         };
         panel.Children.Add(typeCombo);
+        var error = new TextBlock { Foreground = Brushes.Salmon, TextWrapping = TextWrapping.Wrap, IsVisible = false };
+        panel.Children.Add(error);
 
         var buttonPanel = new StackPanel
         {
@@ -925,8 +897,8 @@ public class EnvironmentWidget : UserControl
             Spacing = 10,
             HorizontalAlignment = HorizontalAlignment.Right
         };
-        var okBtn = new Button { Content = "Add", Background = new SolidColorBrush(Color.FromRgb(0, 100, 0)), Foreground = Brushes.White };
-        var cancelBtn = new Button { Content = "Cancel", Background = new SolidColorBrush(Color.FromRgb(100, 0, 0)), Foreground = Brushes.White };
+        var okBtn = new Button { Content = "Add", IsDefault = true };
+        var cancelBtn = new Button { Content = "Cancel", IsCancel = true };
 
         buttonPanel.Children.Add(okBtn);
         buttonPanel.Children.Add(cancelBtn);
@@ -936,25 +908,41 @@ public class EnvironmentWidget : UserControl
 
         okBtn.Click += (_, _) =>
         {
-            if (!string.IsNullOrEmpty(nameInput.Text))
+            error.IsVisible = true;
+            if (string.IsNullOrWhiteSpace(nameInput.Text))
             {
-                AddDataEntity(nameInput.Text, valueInput.Text, typeCombo.SelectedItem?.ToString() ?? "String");
+                error.Text = "Enter a data name.";
+                nameInput.Focus();
+                return;
             }
-            dialog.Close();
+            try
+            {
+                AddDataEntity(nameInput.Text.Trim(), valueInput.Text ?? "", typeCombo.SelectedItem?.ToString() ?? "String");
+                dialog.Close();
+            }
+            catch (Exception exception) when (exception is FormatException or OverflowException or JsonException)
+            {
+                error.Text = $"Invalid {typeCombo.SelectedItem} value.";
+                valueInput.Focus();
+            }
         };
 
         cancelBtn.Click += (_, _) => dialog.Close();
 
-        dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
+        dialog.Opened += (_, _) => nameInput.Focus();
+        dialog.ShowDialog(owner);
     }
 
     private void ShowAddFolderDialog()
     {
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
         var dialog = new Window
         {
             Title = "Add Folder",
             Width = 350,
-            Height = 120,
+            SizeToContent = SizeToContent.Height,
+            CanResize = false,
+            ShowInTaskbar = false,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Background = new SolidColorBrush(Color.FromRgb(35, 35, 40))
         };
@@ -964,6 +952,8 @@ public class EnvironmentWidget : UserControl
         panel.Children.Add(new TextBlock { Text = "Folder Name:", Foreground = Brushes.White });
         var nameInput = new TextBox { Text = "New Folder" };
         panel.Children.Add(nameInput);
+        var error = new TextBlock { Text = "Enter a folder name.", Foreground = Brushes.Salmon, IsVisible = false };
+        panel.Children.Add(error);
 
         var buttonPanel = new StackPanel
         {
@@ -971,8 +961,8 @@ public class EnvironmentWidget : UserControl
             Spacing = 10,
             HorizontalAlignment = HorizontalAlignment.Right
         };
-        var okBtn = new Button { Content = "Add", Background = new SolidColorBrush(Color.FromRgb(0, 100, 0)), Foreground = Brushes.White };
-        var cancelBtn = new Button { Content = "Cancel", Background = new SolidColorBrush(Color.FromRgb(100, 0, 0)), Foreground = Brushes.White };
+        var okBtn = new Button { Content = "Add", IsDefault = true };
+        var cancelBtn = new Button { Content = "Cancel", IsCancel = true };
 
         buttonPanel.Children.Add(okBtn);
         buttonPanel.Children.Add(cancelBtn);
@@ -982,46 +972,51 @@ public class EnvironmentWidget : UserControl
 
         okBtn.Click += (_, _) =>
         {
-            if (!string.IsNullOrWhiteSpace(nameInput.Text))
+            if (string.IsNullOrWhiteSpace(nameInput.Text))
             {
-                AddFolderEntity(nameInput.Text);
+                error.IsVisible = true;
+                nameInput.Focus();
+                return;
             }
+            AddFolderEntity(nameInput.Text.Trim());
             dialog.Close();
         };
 
         cancelBtn.Click += (_, _) => dialog.Close();
 
-        dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
+        dialog.Opened += (_, _) => { nameInput.Focus(); nameInput.SelectAll(); };
+        dialog.ShowDialog(owner);
     }
 
-    private async Task TryAddSymbol(string name)
+    private void AddSymbolEntity(ISymbol symbol)
     {
-        if (string.IsNullOrWhiteSpace(name)) return;
-
-        var project = _workspace.CurrentSolution.Projects.FirstOrDefault();
-        if (project == null) return;
-
-        var symbols = await SymbolFinder.FindSourceDeclarationsWithPatternAsync(
-            project.Solution, name, SymbolFilter.All);
-        var found = symbols.FirstOrDefault();
-
-        if (found != null)
+        var existing = _entities.FirstOrDefault(entity =>
+            entity.Type == EntityType.CodeSymbol && SymbolEqualityComparer.Default.Equals(entity.RoslynSymbol, symbol));
+        if (existing != null)
         {
-            var entity = new EnvironmentEntity
-            {
-                Name = found.Name,
-                Type = EntityType.CodeSymbol,
-                RoslynSymbol = found,
-                Description = $"{found.Kind} from {found.ContainingNamespace}"
-            };
-
-            _entities.Add(entity);
-            UpdateStatus($"Added symbol: {found.Name}");
+            RevealEntity(existing);
+            UpdateStatus($"Already added: {symbol.Name}");
+            return;
         }
-        else
+        var entity = new EnvironmentEntity
         {
-            UpdateStatus($"Symbol '{name}' not found", true);
-        }
+            Name = symbol.Name,
+            Type = EntityType.CodeSymbol,
+            RoslynSymbol = symbol,
+            FilePath = symbol.Locations.FirstOrDefault(location => location.IsInSource)?.SourceTree?.FilePath,
+            Description = symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)
+        };
+        _entities.Add(entity);
+        RevealEntity(entity);
+        UpdateStatus($"Added symbol: {symbol.Name}");
+    }
+
+    private void RevealEntity(EnvironmentEntity entity)
+    {
+        _searchBox.Text = "";
+        _typeFilter.SelectedIndex = 0;
+        ApplyFilter();
+        _entityTree.SelectedItem = entity;
     }
 
     private void AddFileEntity(string filePath)
@@ -1036,6 +1031,7 @@ public class EnvironmentWidget : UserControl
         };
 
         _entities.Add(entity);
+        RevealEntity(entity);
         UpdateStatus($"Added file: {Path.GetFileName(filePath)}");
     }
 
@@ -1043,10 +1039,10 @@ public class EnvironmentWidget : UserControl
     {
         object convertedValue = type switch
         {
-            "Integer" => int.TryParse(value, out var intVal) ? intVal : value,
-            "Double" => double.TryParse(value, out var dblVal) ? dblVal : value,
-            "Boolean" => bool.TryParse(value, out var boolVal) ? boolVal : value,
-            "JSON" => value,
+            "Integer" => int.Parse(value, CultureInfo.InvariantCulture),
+            "Double" => double.Parse(value, CultureInfo.InvariantCulture),
+            "Boolean" => bool.Parse(value),
+            "JSON" => JsonSerializer.Deserialize<JsonElement>(value),
             _ => value
         };
 
@@ -1059,6 +1055,7 @@ public class EnvironmentWidget : UserControl
         };
 
         _entities.Add(entity);
+        RevealEntity(entity);
         UpdateStatus($"Added data: {name}");
     }
 
@@ -1073,6 +1070,7 @@ public class EnvironmentWidget : UserControl
         };
 
         _entities.Add(entity);
+        RevealEntity(entity);
         UpdateStatus($"Added folder: {folderName}");
     }
 
@@ -1115,34 +1113,34 @@ public class EnvironmentWidget : UserControl
         UpdateStatus($"Exported to: {Path.GetFileName(filePath)}");
     }
 
-    private void ImportEnvironment()
+    private async void ImportEnvironment()
     {
-        var dialog = new OpenFileDialog
+        var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (storageProvider is null)
+            return;
+
+        var files = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
             Title = "Import Environment",
-            Filters = new List<FileDialogFilter>
+            AllowMultiple = false,
+            FileTypeFilter = new List<FilePickerFileType>
             {
-                new() { Name = "JSON Files", Extensions = { "json" } }
-            }
-        };
-
-        dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window()).ContinueWith(t =>
-        {
-            if (t.Result?.FirstOrDefault() is string file)
-            {
-                try
-                {
-                    var json = File.ReadAllText(file);
-                    Dispatcher.UIThread.Post(() =>
-                        UpdateStatus($"Imported from: {Path.GetFileName(file)}"));
-                }
-                catch (Exception ex)
-                {
-                    Dispatcher.UIThread.Post(() =>
-                        UpdateStatus($"Import error: {ex.Message}", true));
-                }
+                new("JSON Files") { Patterns = new[] { "*.json" } }
             }
         });
+        if (files.Count == 0)
+            return;
+
+        var file = files[0].Path.LocalPath;
+        try
+        {
+            var json = await File.ReadAllTextAsync(file);
+            UpdateStatus($"Imported from: {Path.GetFileName(file)}");
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus($"Import error: {ex.Message}", true);
+        }
     }
 
     #endregion
@@ -1262,7 +1260,8 @@ public class EnvironmentWidget : UserControl
 
     private void ApplyFilter()
     {
-        var searchTerm = _searchBox.Text?.ToLower() ?? "";
+        if (_entityTree == null || _typeFilter == null) return;
+        var searchTerm = _searchBox.Text?.Trim() ?? "";
         var filterType = _typeFilter.SelectedItem?.ToString() ?? "All";
 
         IEnumerable<EnvironmentEntity> filtered = _entities;
@@ -1270,8 +1269,9 @@ public class EnvironmentWidget : UserControl
         if (!string.IsNullOrEmpty(searchTerm))
         {
             filtered = filtered.Where(e =>
-                e.Name.ToLower().Contains(searchTerm) ||
-                (e.Description?.ToLower().Contains(searchTerm) ?? false));
+                e.Name.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ||
+                e.Description.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ||
+                (e.FilePath?.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
         if (filterType != "All")
@@ -1289,7 +1289,11 @@ public class EnvironmentWidget : UserControl
         }
 
         var itemsSource = filtered.ToList();
+        var selected = _entityTree.SelectedItem;
         _entityTree.ItemsSource = itemsSource;
+        if (selected is EnvironmentEntity entity && itemsSource.Contains(entity))
+            _entityTree.SelectedItem = entity;
+        if (_entityCount != null) _entityCount.Text = $"{itemsSource.Count}/{_entities.Count}";
         UpdateStatus($"Showing {itemsSource.Count} of {_entities.Count} entities");
     }
 

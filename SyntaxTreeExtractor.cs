@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.FlowAnalysis;
 
 namespace CAAI;
 
-public class SyntaxTreeExtractor(AdhocWorkspace _workspace)
+public class SyntaxTreeExtractor
 {
     private static readonly SymbolEqualityComparer SymEq = SymbolEqualityComparer.Default;
 

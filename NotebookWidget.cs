@@ -5,10 +5,11 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Layout;
+using Avalonia.Platform.Storage;
 using Avalonia.Media;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
-using System.Text.RegularExpressions;
+using Markdig;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using System.Text.Json;
@@ -93,30 +94,100 @@ public class NotebookGlobals
     public void Display(object value) => Console.WriteLine($"📊 {value}");
 }
 
-public class NotebookWidget : UserControl
+internal sealed class NotebookConsoleWriter : TextWriter
 {
+    private static readonly object Sync = new();
+    private static readonly AsyncLocal<CaptureTarget?> Current = new();
+    private static bool _installed;
+    private readonly TextWriter _fallback;
+
+    private NotebookConsoleWriter(TextWriter fallback) => _fallback = fallback;
+
+    public override Encoding Encoding => _fallback.Encoding;
+    public override void Write(char value) => WriteToTarget(writer => writer.Write(value));
+    public override void Write(string? value) => WriteToTarget(writer => writer.Write(value));
+    public override void WriteLine(string? value) => WriteToTarget(writer => writer.WriteLine(value));
+    public override void Flush() => WriteToTarget(writer => writer.Flush());
+
+    private void WriteToTarget(Action<TextWriter> write)
+    {
+        if (Current.Value is { } target)
+            target.Write(write, _fallback);
+        else
+            write(_fallback);
+    }
+
+    public static IDisposable Capture(TextWriter writer)
+    {
+        lock (Sync)
+        {
+            if (!_installed)
+            {
+                Console.SetOut(new NotebookConsoleWriter(Console.Out));
+                Console.SetError(new NotebookConsoleWriter(Console.Error));
+                _installed = true;
+            }
+        }
+
+        var previous = Current.Value;
+        var target = new CaptureTarget(writer);
+        Current.Value = target;
+        return new CaptureScope(target, previous);
+    }
+
+    private sealed class CaptureTarget(TextWriter writer)
+    {
+        private readonly object _sync = new();
+        private bool _active = true;
+
+        public void Write(Action<TextWriter> write, TextWriter fallback)
+        {
+            lock (_sync)
+                write(_active ? writer : fallback);
+        }
+
+        public void Deactivate()
+        {
+            lock (_sync)
+                _active = false;
+        }
+    }
+
+    private sealed class CaptureScope(CaptureTarget target, CaptureTarget? previous) : IDisposable
+    {
+        public void Dispose()
+        {
+            target.Deactivate();
+            Current.Value = previous;
+        }
+    }
+}
+
+public class NotebookWidget : UserControl, IDisposable
+{
+    private static readonly MarkdownPipeline MarkdownPipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .DisableHtml()
+        .Build();
     public ObservableCollection<NotebookCell> Cells { get; } = new();
     private ScriptState<object>? _lastState;
     private readonly ScriptOptions _options;
     private readonly ObjectInspectorWidget1 _inspector;
-    private ComboBox? _cellTypeCombo;
+    private readonly NotebookWorkspace _analysis;
+    private readonly Dictionary<NotebookCell, CodeEditor> _cellEditors = new();
+    private readonly Dictionary<NotebookCell, TextBlock> _cellDiagnostics = new();
+    private readonly Dictionary<NotebookCell, CancellationTokenSource> _diagnosticRequests = new();
+    private readonly Dictionary<NotebookCell, TextBlock> _cellNumbers = new();
+    private bool _isExecutingNotebook;
+    private bool _disposeRequested;
+    public string? FilePath { get; private set; }
 
     public NotebookWidget(ObjectInspectorWidget1 inspector)
     {
         _inspector = inspector;
         
         _options = ScriptOptions.Default
-            .AddReferences(
-                typeof(object).Assembly,
-                typeof(Enumerable).Assembly,
-                typeof(System.Collections.Generic.List<>).Assembly,
-                typeof(System.Text.StringBuilder).Assembly,
-                typeof(System.Text.RegularExpressions.Regex).Assembly,
-                typeof(System.Linq.Expressions.Expression).Assembly,
-                typeof(System.Dynamic.DynamicObject).Assembly,
-                typeof(System.Data.DataTable).Assembly,
-                typeof(System.Xml.XmlDocument).Assembly
-            )
+            .AddReferences(NotebookWorkspace.RuntimeReferences)
             .AddImports(
                 "System", 
                 "System.Collections.Generic", 
@@ -126,6 +197,27 @@ public class NotebookWidget : UserControl
                 "System.Math",
                 "System.IO"
             );
+
+        _analysis = new NotebookWorkspace(_options.Imports);
+        _analysis.WorkspaceChanged += workspace =>
+        {
+            foreach (var editor in _cellEditors.Values)
+                editor.RebindWorkspace(workspace);
+        };
+        _analysis.SessionChanged += () =>
+        {
+            foreach (var cell in _cellEditors.Keys.ToList())
+                _ = UpdateCellDiagnosticsAsync(cell);
+        };
+        Cells.CollectionChanged += (_, _) =>
+        {
+            foreach (var cell in _cellEditors.Keys.Where(cell => !Cells.Contains(cell)).ToList())
+                RemoveCellEditor(cell);
+            foreach (var cell in _cellNumbers.Keys.Where(cell => !Cells.Contains(cell)).ToList())
+                _cellNumbers.Remove(cell);
+            foreach (var (cell, number) in _cellNumbers)
+                number.Text = $"[{Cells.IndexOf(cell) + 1}]";
+        };
 
         BuildUI();
         AddDefaultCells();
@@ -223,7 +315,12 @@ public class NotebookWidget : UserControl
             Cursor = new Cursor(StandardCursorType.Hand)
         };
         ToolTip.SetTip(clearAllBtn, "Clear all cells");
-        clearAllBtn.Click += (_, _) => Cells.Clear();
+        clearAllBtn.Click += (_, _) =>
+        {
+            if (_isExecutingNotebook) return;
+            Cells.Clear();
+            ResetSession();
+        };
 
         // Reset session button
         var resetBtn = new Button
@@ -310,7 +407,7 @@ public class NotebookWidget : UserControl
             };
 
             // Cell type indicator and selector
-            _cellTypeCombo = new ComboBox
+            var cellTypeCombo = new ComboBox
             {
                 Width = 120,
                 ItemsSource = new[] { "Code", "Markdown" },
@@ -318,13 +415,8 @@ public class NotebookWidget : UserControl
                 Background = new SolidColorBrush(Color.FromRgb(45, 45, 50)),
                 Foreground = Brushes.White
             };
-            _cellTypeCombo.SelectionChanged += (s, e) =>
-            {
-                cell.Type = _cellTypeCombo.SelectedIndex == 0 ? CellType.Code : CellType.Markdown;
-                RefreshCellUI(cellBorder, cell);
-            };
-            headerPanel.Children.Add(_cellTypeCombo);
-            Grid.SetColumn(_cellTypeCombo, 0);
+            headerPanel.Children.Add(cellTypeCombo);
+            Grid.SetColumn(cellTypeCombo, 0);
 
             // Cell number
             var cellNumber = new TextBlock
@@ -335,6 +427,7 @@ public class NotebookWidget : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(10, 0, 0, 0)
             };
+            _cellNumbers[cell] = cellNumber;
             headerPanel.Children.Add(cellNumber);
             Grid.SetColumn(cellNumber, 1);
 
@@ -377,7 +470,11 @@ public class NotebookWidget : UserControl
                 BorderThickness = new Thickness(0),
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
-            deleteBtn.Click += (_, _) => Cells.Remove(cell);
+            deleteBtn.Click += (_, _) =>
+            {
+                if (!_isExecutingNotebook)
+                    Cells.Remove(cell);
+            };
 
             headerPanel.Children.Add(runBtn);
             Grid.SetColumn(runBtn, 2);
@@ -394,29 +491,18 @@ public class NotebookWidget : UserControl
                 IsVisible = cell.IsExpanded
             };
 
-            // Input area
-            if (cell.Type == CellType.Code)
+            var inputHost = new ContentControl();
+            contentContainer.Children.Add(inputHost);
+            void UpdateInput()
             {
-                var editor = new TextBox
+                inputHost.Content = null;
+                RemoveCellEditor(cell);
+                if (cell.Type == CellType.Code)
                 {
-                    Text = cell.Code,
-                    AcceptsReturn = true,
-                    AcceptsTab = true,
-                    FontFamily = new FontFamily("Cascadia Code, Consolas, Monospace"),
-                    FontSize = 12,
-                    Background = new SolidColorBrush(Color.FromRgb(40, 40, 45)),
-                    Foreground = Brushes.White,
-                    CaretBrush = Brushes.White,
-                    MinHeight = 100,
-                    TextWrapping = TextWrapping.Wrap,
-                    Margin = new Thickness(0, 5)
-                };
-                editor.TextChanged += (s, e) => cell.Code = editor.Text;
-                contentContainer.Children.Add(editor);
-            }
-            else // Markdown cell
-            {
-                // Toggle between edit and preview
+                    inputHost.Content = CreateCodeCellEditor(cell);
+                    return;
+                }
+
                 var markdownContainer = new StackPanel();
 
                 var mdToolbar = new StackPanel
@@ -455,25 +541,28 @@ public class NotebookWidget : UserControl
                 };
                 mdEditor.TextChanged += (s, e) => cell.Code = mdEditor.Text;
 
-                var mdPreview = new MarkdownScrollViewer
+                var mdPreview = new Markdown.Avalonia.MarkdownScrollViewer
                 {
                     Markdown = cell.Code,
+                    MinHeight = 150
+                };
+                var previewBorder = new Border
+                {
                     Background = new SolidColorBrush(Color.FromRgb(40, 40, 45)),
-                    Foreground = Brushes.White,
                     Padding = new Thickness(10),
-                    MinHeight = 150,
-                    IsVisible = false
+                    IsVisible = false,
+                    Child = mdPreview
                 };
 
                 editModeBtn.Click += (_, _) =>
                 {
                     mdEditor.IsVisible = true;
-                    mdPreview.IsVisible = false;
+                    previewBorder.IsVisible = false;
                 };
                 previewModeBtn.Click += (_, _) =>
                 {
                     mdEditor.IsVisible = false;
-                    mdPreview.IsVisible = true;
+                    previewBorder.IsVisible = true;
                     mdPreview.Markdown = cell.Code;
                 };
 
@@ -481,10 +570,11 @@ public class NotebookWidget : UserControl
                 mdToolbar.Children.Add(previewModeBtn);
                 markdownContainer.Children.Add(mdToolbar);
                 markdownContainer.Children.Add(mdEditor);
-                markdownContainer.Children.Add(mdPreview);
+                markdownContainer.Children.Add(previewBorder);
 
-                contentContainer.Children.Add(markdownContainer);
+                inputHost.Content = markdownContainer;
             }
+            UpdateInput();
 
             // Output area
             var outputBorder = new Border
@@ -521,6 +611,21 @@ public class NotebookWidget : UserControl
 
             contentContainer.Children.Add(outputBorder);
 
+            cellTypeCombo.SelectionChanged += (_, _) =>
+            {
+                var selectedType = cellTypeCombo.SelectedIndex == 0 ? CellType.Code : CellType.Markdown;
+                if (selectedType == cell.Type) return;
+                if (_isExecutingNotebook)
+                {
+                    cellTypeCombo.SelectedIndex = cell.Type == CellType.Code ? 0 : 1;
+                    return;
+                }
+                cell.Type = selectedType;
+                UpdateInput();
+                runBtn.IsVisible = selectedType == CellType.Code;
+                outputBorder.IsVisible = selectedType == CellType.Code && !string.IsNullOrEmpty(cell.Output);
+            };
+
             // Loading indicator
             var loadingBorder = new Border
             {
@@ -545,7 +650,7 @@ public class NotebookWidget : UserControl
                 if (e.PropertyName == nameof(NotebookCell.Output))
                 {
                     outputText.Text = cell.Output;
-                    outputBorder.IsVisible = !string.IsNullOrEmpty(cell.Output);
+                    outputBorder.IsVisible = cell.Type == CellType.Code && !string.IsNullOrEmpty(cell.Output);
                     outputText.Foreground = GetOutputColor(cell.Output);
                 }
                 else if (e.PropertyName == nameof(NotebookCell.IsExecuting))
@@ -560,18 +665,85 @@ public class NotebookWidget : UserControl
         });
     }
 
-    private void RefreshCellUI(Border cellBorder, NotebookCell cell)
+    private Control CreateCodeCellEditor(NotebookCell cell)
     {
-        // Simple refresh by rebuilding - in production you'd update specific elements
-        var parent = cellBorder.Parent as StackPanel;
-        if (parent != null)
+        var documentId = _analysis.GetOrCreateDocument(cell);
+        var editor = new CodeEditor("", _analysis.Workspace, documentId, cell.Code)
         {
-            var newContent = CreateCellTemplate().Build(cell);
-            var index = parent.Children.IndexOf(cellBorder);
-            if (index >= 0)
-            {
-                parent.Children[index] = newContent;
-            }
+            MinHeight = 100,
+            Height = 180,
+            Margin = new Thickness(0, 5)
+        };
+        var diagnostics = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.FromRgb(235, 155, 140)),
+            FontSize = 11,
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        _cellEditors[cell] = editor;
+        _cellDiagnostics[cell] = diagnostics;
+        editor.TextChanged += (_, text) =>
+        {
+            cell.Code = text;
+            _ = UpdateCellDiagnosticsAsync(cell);
+        };
+        editor.SaveRequested += async (_, _) => await SaveNotebookAsync();
+        var panel = new StackPanel();
+        panel.Children.Add(editor);
+        panel.Children.Add(diagnostics);
+        _ = UpdateCellDiagnosticsAsync(cell);
+        return panel;
+    }
+
+    private void RemoveCellEditor(NotebookCell cell)
+    {
+        if (_diagnosticRequests.Remove(cell, out var request))
+        {
+            request.Cancel();
+            request.Dispose();
+        }
+        _cellEditors.Remove(cell);
+        _cellDiagnostics.Remove(cell);
+        _analysis.RemoveCell(cell);
+    }
+
+    private async Task UpdateCellDiagnosticsAsync(NotebookCell cell)
+    {
+        if (_disposeRequested || !_cellEditors.TryGetValue(cell, out var editor) || !_cellDiagnostics.TryGetValue(cell, out var output))
+            return;
+        if (_diagnosticRequests.Remove(cell, out var previous))
+        {
+            previous.Cancel();
+            previous.Dispose();
+        }
+        var request = new CancellationTokenSource();
+        _diagnosticRequests[cell] = request;
+        var token = request.Token;
+        try
+        {
+            await Task.Delay(300, token);
+            var document = _analysis.Workspace.CurrentSolution.GetDocument(_analysis.GetOrCreateDocument(cell));
+            var model = document is null ? null : await document.GetSemanticModelAsync(token);
+            if (model is null || token.IsCancellationRequested ||
+                !_cellEditors.TryGetValue(cell, out var currentEditor) || currentEditor != editor)
+                return;
+            var diagnostics = model.GetDiagnostics(cancellationToken: token)
+                .Where(item => item.Location.IsInSource && item.Severity >= Microsoft.CodeAnalysis.DiagnosticSeverity.Warning)
+                .ToList();
+            output.Text = string.Join("\n", diagnostics.Take(3).Select(item =>
+                $"{item.Location.GetLineSpan().StartLinePosition.Line + 1}: {item.Id} {item.GetMessage()}"));
+            if (diagnostics.Count > 3)
+                output.Text += $"\n{diagnostics.Count - 3} more";
+            output.IsVisible = diagnostics.Count > 0;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            output.Text = $"Analysis unavailable: {ex.Message}";
+            output.IsVisible = true;
         }
     }
 
@@ -629,40 +801,63 @@ message
 
     private async Task ExecuteCell(NotebookCell cell)
     {
-        if (string.IsNullOrWhiteSpace(cell.Code)) return;
+        if (_isExecutingNotebook || string.IsNullOrWhiteSpace(cell.Code)) return;
 
+        _isExecutingNotebook = true;
+        try
+        {
+            await ExecuteCellCore(cell);
+        }
+        finally
+        {
+            _isExecutingNotebook = false;
+            if (_disposeRequested)
+                _analysis.Dispose();
+        }
+    }
+
+    private async Task<bool> ExecuteCellCore(NotebookCell cell)
+    {
         cell.IsExecuting = true;
         cell.Output = "";
+        var code = cell.Code;
+        using var output = new StringWriter();
+        using var capture = NotebookConsoleWriter.Capture(TextWriter.Synchronized(output));
 
         try
         {
             if (_lastState == null)
             {
                 // First execution: Start a new session
-                _lastState = await CSharpScript.RunAsync(cell.Code, _options, globals: new NotebookGlobals());
+                _lastState = await CSharpScript.RunAsync(code, _options, globals: new NotebookGlobals());
             }
             else
             {
                 // Subsequent execution: Continue from the previous state
-                _lastState = await _lastState.ContinueWithAsync(cell.Code);
+                _lastState = await _lastState.ContinueWithAsync(code);
             }
 
+            _analysis.RecordSubmission(code);
             var returnValue = _lastState.ReturnValue;
-            cell.Output = FormatOutput(returnValue);
+            var printed = output.ToString();
+            cell.Output = printed + (returnValue is null && printed.Length > 0 ? "" : FormatOutput(returnValue));
 
             // Update inspector with variables
             if (_inspector != null && _lastState.Variables.Any())
             {
                 _inspector.UpdateVariables(_lastState.Variables);
             }
+            return true;
         }
         catch (CompilationErrorException ex)
         {
-            cell.Output = "❌ Compilation Error:\n" + string.Join("\n", ex.Diagnostics.Select(d => d.ToString()));
+            cell.Output = output + "❌ Compilation Error:\n" + string.Join("\n", ex.Diagnostics.Select(d => d.ToString()));
+            return false;
         }
         catch (Exception ex)
         {
-            cell.Output = $"❌ Runtime Error: {ex.Message}";
+            cell.Output = $"{output}❌ Runtime Error: {ex.Message}";
+            return false;
         }
         finally
         {
@@ -679,9 +874,8 @@ message
             // Handle different return types
             if (value is IEnumerable<object> enumerable && !(value is string))
             {
-                var items = string.Join(", ", enumerable.Take(10));
-                var count = enumerable.Count();
-                return $"📊 IEnumerable ({count} items): [{items}{(count > 10 ? "..." : "")}]";
+                var items = enumerable.Take(11).ToList();
+                return $"📊 IEnumerable: [{string.Join(", ", items.Take(10))}{(items.Count > 10 ? "..." : "")}]";
             }
             
             if (value is Exception ex)
@@ -697,46 +891,72 @@ message
 
     private async Task RunAllCells()
     {
-        ResetSession();
-        foreach (var cell in Cells.Where(c => c.Type == CellType.Code))
+        if (_isExecutingNotebook) return;
+        _isExecutingNotebook = true;
+        try
         {
-            await ExecuteCell(cell);
+            ResetSessionCore();
+            foreach (var cell in Cells.Where(c => c.Type == CellType.Code).ToList())
+            {
+                if (_disposeRequested) break;
+                if (!string.IsNullOrWhiteSpace(cell.Code) && !await ExecuteCellCore(cell))
+                    break;
+            }
+        }
+        finally
+        {
+            _isExecutingNotebook = false;
+            if (_disposeRequested)
+                _analysis.Dispose();
         }
     }
 
-    private void ResetSession()
+    private void ResetSession(bool clearOutputs = true)
+    {
+        if (_isExecutingNotebook) return;
+        ResetSessionCore(clearOutputs);
+    }
+
+    private void ResetSessionCore(bool clearOutputs = true)
     {
         _lastState = null;
-        foreach (var cell in Cells)
+        _analysis.Reset();
+        if (clearOutputs)
         {
-            cell.Output = "";
+            foreach (var cell in Cells)
+            {
+                cell.Output = "";
+            }
         }
         _inspector?.Clear();
     }
 
-    public async Task SaveNotebookAsync(string? filePath = null)
+    public async Task<bool> SaveNotebookAsync(string? filePath = null)
     {
         try
         {
+            filePath ??= FilePath;
             // If no path provided, show save dialog
             if (string.IsNullOrEmpty(filePath))
             {
-                var dialog = new SaveFileDialog
+                var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+                if (storageProvider is null)
+                    return false;
+
+                var result = await storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
                 {
                     Title = "Save Notebook",
                     DefaultExtension = "json",
-                    Filters = new List<FileDialogFilter>
+                    FileTypeChoices = new List<FilePickerFileType>
                     {
-                        new() { Name = "Notebook Files", Extensions = { "json" } },
-                        new() { Name = "All Files", Extensions = { "*" } }
+                        new("Notebook Files") { Patterns = new[] { "*.json" } },
+                        new("All Files") { Patterns = new[] { "*" } }
                     }
-                };
-                
-                var result = await dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window());
-                if (string.IsNullOrEmpty(result))
-                    return;
-                
-                filePath = result;
+                });
+                if (result is null)
+                    return false;
+
+                filePath = result.Path.LocalPath;
             }
 
             // Prepare data for serialization
@@ -762,39 +982,47 @@ message
             
             var json = JsonSerializer.Serialize(saveData, options);
             await File.WriteAllTextAsync(filePath, json);
+            FilePath = filePath;
             
             // Show success message
             await ShowNotification($"Notebook saved to: {Path.GetFileName(filePath)}", OutputType.Success);
+            return true;
         }
         catch (Exception ex)
         {
             await ShowNotification($"Error saving notebook: {ex.Message}", OutputType.Error);
+            return false;
         }
     }
 
     public async Task<bool> LoadNotebookAsync(string? filePath = null)
     {
+        if (_isExecutingNotebook)
+            return false;
+
         try
         {
             // If no path provided, show open dialog
             if (string.IsNullOrEmpty(filePath))
             {
-                var dialog = new OpenFileDialog
+                var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+                if (storageProvider is null)
+                    return false;
+
+                var result = await storageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
                 {
                     Title = "Open Notebook",
                     AllowMultiple = false,
-                    Filters = new List<FileDialogFilter>
+                    FileTypeFilter = new List<FilePickerFileType>
                     {
-                        new() { Name = "Notebook Files", Extensions = { "json" } },
-                        new() { Name = "All Files", Extensions = { "*" } }
+                        new("Notebook Files") { Patterns = new[] { "*.json" } },
+                        new("All Files") { Patterns = new[] { "*" } }
                     }
-                };
-                
-                var result = await dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window());
-                if (result == null || result.Length == 0)
+                });
+                if (result.Count == 0)
                     return false;
-                
-                filePath = result[0];
+
+                filePath = result[0].Path.LocalPath;
             }
 
             // Read and deserialize
@@ -810,6 +1038,9 @@ message
                 await ShowNotification("Invalid notebook file format.", OutputType.Error);
                 return false;
             }
+
+            if (_isExecutingNotebook || _disposeRequested)
+                return false;
 
             // Clear existing cells
             Cells.Clear();
@@ -827,7 +1058,8 @@ message
             }
 
             // Reset session
-            ResetSession();
+            ResetSession(clearOutputs: false);
+            FilePath = filePath;
             
             await ShowNotification($"Loaded notebook: {Path.GetFileName(filePath)}", OutputType.Success);
             return true;
@@ -858,28 +1090,44 @@ message
         });
     }
 
+    public void Dispose()
+    {
+        if (_disposeRequested) return;
+        _disposeRequested = true;
+        foreach (var request in _diagnosticRequests.Values)
+        {
+            request.Cancel();
+            request.Dispose();
+        }
+        _diagnosticRequests.Clear();
+        if (!_isExecutingNotebook)
+            _analysis.Dispose();
+    }
+
     public async Task ExportHtmlAsync(string? filePath = null)
     {
         try
         {
             if (string.IsNullOrEmpty(filePath))
             {
-                var dialog = new SaveFileDialog
+                var storageProvider = TopLevel.GetTopLevel(this)?.StorageProvider;
+                if (storageProvider is null)
+                    return;
+
+                var result = await storageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
                 {
                     Title = "Export Notebook as HTML",
                     DefaultExtension = "html",
-                    Filters = new List<FileDialogFilter>
+                    FileTypeChoices = new List<FilePickerFileType>
                     {
-                        new() { Name = "HTML Files", Extensions = { "html" } },
-                        new() { Name = "All Files", Extensions = { "*" } }
+                        new("HTML Files") { Patterns = new[] { "*.html" } },
+                        new("All Files") { Patterns = new[] { "*" } }
                     }
-                };
-                
-                var result = await dialog.ShowAsync(this.GetVisualRoot() as Window ?? new Window());
-                if (string.IsNullOrEmpty(result))
+                });
+                if (result is null)
                     return;
-                
-                filePath = result;
+
+                filePath = result.Path.LocalPath;
             }
 
             var html = GenerateHtml();
@@ -966,112 +1214,10 @@ message
 
     private string ConvertMarkdownToHtml(string markdown)
     {
-        // Simple markdown to HTML conversion
-        var result = HtmlEncode(markdown);
-        // Add simple conversions
-        result = Regex.Replace(result, @"\*\*(.*?)\*\*", "<strong>$1</strong>");
-        result = Regex.Replace(result, @"\*(.*?)\*", "<em>$1</em>");
-        result = Regex.Replace(result, @"^# (.*?)$", "<h1>$1</h1>", RegexOptions.Multiline);
-        result = Regex.Replace(result, @"^## (.*?)$", "<h2>$1</h2>", RegexOptions.Multiline);
-        result = Regex.Replace(result, @"^### (.*?)$", "<h3>$1</h3>", RegexOptions.Multiline);
-        result = result.Replace("\n", "<br>");
-        return result;
+        return Markdig.Markdown.ToHtml(markdown, MarkdownPipeline);
     }
 }
 
-// Simple Markdown viewer for Avalonia
-public class MarkdownScrollViewer : ScrollViewer
+public class ObjectInspectorWidget1 : ObjectInspectorWidget
 {
-    public static readonly StyledProperty<string> MarkdownProperty =
-        AvaloniaProperty.Register<MarkdownScrollViewer, string>(nameof(Markdown));
-
-    public string Markdown
-    {
-        get => GetValue(MarkdownProperty);
-        set => SetValue(MarkdownProperty, value);
-    }
-
-    static MarkdownScrollViewer()
-    {
-        MarkdownProperty.Changed.AddClassHandler<MarkdownScrollViewer>((x, e) => x.OnMarkdownChanged(e));
-    }
-
-    private void OnMarkdownChanged(AvaloniaPropertyChangedEventArgs e)
-    {
-        if (e.NewValue is string markdown)
-        {
-            // Simple markdown rendering (you can replace with a proper markdown control)
-            var textBlock = new TextBlock
-            {
-                Text = ConvertMarkdownToPlainText(markdown),
-                TextWrapping = TextWrapping.Wrap
-            };
-            Content = textBlock;
-        }
-    }
-
-    private string ConvertMarkdownToPlainText(string markdown)
-    {
-        // Simple conversion - you can use a proper markdown library here
-        var result = markdown;
-        
-        // Headers
-        result = Regex.Replace(result, @"^# (.*?)$", "█ $1", RegexOptions.Multiline);
-        result = Regex.Replace(result, @"^## (.*?)$", "  ▪ $1", RegexOptions.Multiline);
-        result = Regex.Replace(result, @"^### (.*?)$", "    • $1", RegexOptions.Multiline);
-        
-        // Bold
-        result = Regex.Replace(result, @"\*\*(.*?)\*\*", "$1", RegexOptions.Multiline);
-        
-        // Italic
-        result = Regex.Replace(result, @"\*(.*?)\*", "$1", RegexOptions.Multiline);
-        
-        // Code blocks
-        result = Regex.Replace(result, @"```csharp\n(.*?)\n```", "$1", RegexOptions.Singleline);
-        result = Regex.Replace(result, @"`(.*?)`", "$1", RegexOptions.Multiline);
-        
-        return result;
-    }
-}
-
-
-public class ObjectInspectorWidget1 : UserControl
-{
-    private TreeView _treeView;
-    private ObservableCollection<TreeViewItem> _items = new();
-
-    public ObjectInspectorWidget1()
-    {
-        _treeView = new TreeView
-        {
-            Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
-            Foreground = Brushes.White,
-            ItemsSource = _items
-        };
-        Content = _treeView;
-    }
-
-    public void Inspect(string name, object? value)
-    {
-        var item = new TreeViewItem { Header = $"{name}: {value?.ToString() ?? "null"}" };
-        _items.Add(item);
-    }
-
-    public void UpdateVariables(IEnumerable<ScriptVariable> variables)
-    {
-        _items.Clear();
-        foreach (var variable in variables)
-        {
-            var item = new TreeViewItem 
-            { 
-                Header = $"{variable.Name} ({variable.Type.Name}) = {variable.Value?.ToString() ?? "null"}" 
-            };
-            _items.Add(item);
-        }
-    }
-
-    public void Clear()
-    {
-        _items.Clear();
-    }
 }

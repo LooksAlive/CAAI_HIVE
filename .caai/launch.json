@@ -1,0 +1,10 @@
+{
+  "AdapterPath": null,
+  "TargetFramework": null,
+  "WorkingDirectory": null,
+  "Arguments": [],
+  "Environment": {},
+  "StopAtEntry": false,
+  "JustMyCode": true,
+  "ExceptionFilters": []
+}
