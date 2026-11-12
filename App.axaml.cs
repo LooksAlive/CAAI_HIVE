@@ -205,6 +205,7 @@ public partial class MainWindow : Window
     private string _activeSideView = "Files";
     private CodeStructureWidget _structureTree = new();
     private FileExplorerWidget _filesTreeView = null!;
+    private GitWidget _gitWidget = null!;
     private readonly ObjectInspectorWidget1 _inspector = new();
     // Inside MainWindow class
     private AdhocWorkspace _workspace = null!;
@@ -220,6 +221,7 @@ public partial class MainWindow : Window
     private readonly Dictionary<DocumentId, List<Diagnostic>> _documentDiagnostics = new();
     private readonly Dictionary<DocumentId, CancellationTokenSource> _diagnosticRequests = new();
     private TextBlock _statusFile = new() { TextTrimming = TextTrimming.CharacterEllipsis };
+    private TextBlock _statusGit = new() { TextTrimming = TextTrimming.CharacterEllipsis };
     private TextBlock _statusDiagnostics = new() { Width = 160, TextAlignment = TextAlignment.Right };
     private TextBlock _statusPosition = new() { Width = 220, TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
     private TextBlock _statusMode = new() { Width = 140, TextAlignment = TextAlignment.Right };
@@ -241,6 +243,7 @@ public partial class MainWindow : Window
     SyntaxTree? currentSyntaxTree = null;
 
     private static string _baseDir = "C:\\Users\\A200542365\\OneDrive - Deutsche Telekom AG\\Desktop\\CAAI_HIVE";
+    private string _gitDirectory = _baseDir;
     public CodeWatcher? CodeWatcher = Environment.GetEnvironmentVariable("DOTNET_WATCH") == "1"
         ? null
         : new CodeWatcher(_baseDir, file =>
@@ -308,6 +311,8 @@ public partial class MainWindow : Window
         }
 
         _nuGetPackageManager.SetProjectFolder(folderPath);
+        _gitDirectory = folderPath;
+        _gitWidget.SetDirectory(folderPath);
     }
 
     private void InitializeRoslyn()
@@ -632,6 +637,7 @@ public partial class MainWindow : Window
         var views = new (string Name, Symbol Icon, Control View)[]
         {
             ("Files", Symbol.Folder, _filesTreeView),
+            ("Git", Symbol.Share, _gitWidget),
             ("Structure", Symbol.List, _structureTree),
             ("Hierarchy", Symbol.Library, _hierarchyTree),
             ("Inspector", Symbol.Find, _inspector),
@@ -704,6 +710,7 @@ public partial class MainWindow : Window
                 heading.Text = view.Name;
                 content.Content = view.View;
                 if (view.Name == "AST") RefreshActiveAst();
+                if (view.Name == "Git") _gitWidget.Refresh();
             };
             tools.Children.Add(button);
         }
@@ -857,11 +864,11 @@ public partial class MainWindow : Window
     {
         var content = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto, Auto"),
+            ColumnDefinitions = new ColumnDefinitions("*, Auto, Auto, Auto, Auto"),
             Margin = new Thickness(10, 0),
             ColumnSpacing = 12
         };
-        var fields = new[] { _statusFile, _statusDiagnostics, _statusPosition, _statusMode };
+        var fields = new[] { _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode };
         for (var index = 0; index < fields.Length; index++)
         {
             var field = fields[index];
@@ -883,6 +890,7 @@ public partial class MainWindow : Window
         {
             _statusMode.IsVisible = bar.Bounds.Width >= 760;
             _statusDiagnostics.IsVisible = bar.Bounds.Width >= 560;
+            _statusGit.IsVisible = bar.Bounds.Width >= 700;
         };
         UpdateStatusBar();
         return bar;
@@ -959,9 +967,9 @@ public partial class MainWindow : Window
     private Control BuildUI()
     {
         var previous = (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
-            _statusFile, _statusDiagnostics, _statusPosition, _statusMode,
+            _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode,
             _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
-            _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab);
+            _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab, _gitWidget);
         var restoreControls = new Stack<Action>();
         var outputVisible = _outputDock?.IsVisible ?? true;
         var outputHeight = _mainGrid?.RowDefinitions[2].Height ?? _outputHeight;
@@ -977,6 +985,7 @@ public partial class MainWindow : Window
             _diagnosticsPanel = new DiagnosticsPanel();
             _astViewer = new AstViewer();
             _statusFile = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis };
+            _statusGit = new TextBlock { MaxWidth = 240, TextTrimming = TextTrimming.CharacterEllipsis };
             _statusDiagnostics = new TextBlock { Width = 160, TextAlignment = TextAlignment.Right };
             _statusPosition = new TextBlock { Width = 220, TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis };
             _statusMode = new TextBlock { Width = 140, TextAlignment = TextAlignment.Right };
@@ -996,9 +1005,9 @@ public partial class MainWindow : Window
         catch
         {
             (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
-                _statusFile, _statusDiagnostics, _statusPosition, _statusMode,
+                _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode,
                 _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
-                _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab) = previous;
+                _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab, _gitWidget) = previous;
             while (restoreControls.TryPop(out var restore))
                 restore();
             throw;
@@ -1081,6 +1090,15 @@ public partial class MainWindow : Window
         SetupStructureTree();
         SetupAstViewer();
         SetupFileTreeView();
+        _gitWidget = new GitWidget(_gitDirectory, path => OpenFile(path), PrepareGitWorkTreeChange);
+        var gitWidget = _gitWidget;
+        gitWidget.StatusChanged += status =>
+        {
+            if (!ReferenceEquals(_gitWidget, gitWidget)) return;
+            _statusGit.Text = status;
+            ToolTip.SetTip(_statusGit, status);
+        };
+        gitWidget.Refresh();
 
         WireEvents(_baseDir);
 
@@ -1588,6 +1606,37 @@ public partial class MainWindow : Window
         _filesTreeView.OnFileCreated += (path) =>
         {
             OpenFile(path);
+        };
+    }
+
+    private Action PrepareGitWorkTreeChange(string root)
+    {
+        var editors = OpenCodeEditors().Where(editor =>
+        {
+            var relative = Path.GetRelativePath(root, editor.FilePath);
+            return !Path.IsPathRooted(relative) && relative != ".." && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        }).ToArray();
+        var snapshots = new Dictionary<CodeEditor, string>();
+        foreach (var editor in editors)
+        {
+            var text = editor.GetText();
+            if (!File.Exists(editor.FilePath) || File.ReadAllText(editor.FilePath) != text)
+                throw new InvalidOperationException("Save or close modified and deleted open files before switching branches or pulling.");
+            snapshots.Add(editor, text);
+        }
+        return () =>
+        {
+            var conflicts = false;
+            foreach (var (editor, text) in snapshots)
+            {
+                if (!File.Exists(editor.FilePath)) { conflicts = true; continue; }
+                var updated = File.ReadAllText(editor.FilePath);
+                if (updated == text) continue;
+                if (editor.GetText() != text) { conflicts = true; continue; }
+                editor._editor.Text = updated;
+            }
+            if (conflicts)
+                throw new InvalidOperationException("Git completed, but some open files were deleted or edited during the operation. Review their buffers before saving.");
         };
     }
 

@@ -1,5 +1,13 @@
 # CAAI_HIVE
 
+## Git
+
+The Git icon in the left toolbar opens source control for the current project folder. Git must be installed and available on `PATH`. Use the panel to initialize a repository, inspect staged and working-tree changes and diffs, stage or unstage files, commit, create or switch local branches, delete merged local branches, inspect the latest 100 commits across refs, and fetch, pull, or push. Select a commit and use the document button or double-click to view its details and diff. Pulls are fast-forward only. Remote URLs, upstream branches, credentials, and commit identity must be configured in Git; terminal credential prompts are disabled. The footer shows the branch, change counts, and ahead/behind counts when an upstream is configured.
+
+Git operates on saved files, so save editor changes before staging or committing. Switching branches and pulling require open repository files to be saved; unchanged editor buffers are refreshed afterward. If a file is deleted or edited during the operation, review its open buffer before saving. Use Refresh to pick up changes made outside the IDE.
+
+Select a local branch and use the rebase action to rebase the current branch onto it. Rebase rewrites commits and asks for confirmation. If conflicts occur, resolve and save the files, stage them in the changes list, and use Continue Rebase; Abort Rebase restores the pre-rebase state. Open repository files must be saved before starting, continuing, or aborting a rebase. Git's normal safety checks still apply; branch deletion does not force-delete unmerged branches.
+
 ## Debugging
 
 CAAI uses the open-source [netcoredbg](https://github.com/Samsung/netcoredbg) Debug Adapter Protocol backend, not VS Code's private debugger installation.
