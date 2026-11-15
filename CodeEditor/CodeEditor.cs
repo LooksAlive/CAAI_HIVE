@@ -164,6 +164,11 @@ public class CodeEditor : UserControl
         _documentId = docId;
         Code = code;
 
+        Content = Build();
+    }
+
+    private object Build()
+    {
         // Setup tooltip
         _toolTip = new ToolTip
         {
@@ -171,9 +176,8 @@ public class CodeEditor : UserControl
             Foreground = Brushes.White,
             BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             BorderThickness = new Thickness(1),
-            Padding = new Thickness(10, 5),
-            FontSize = 12,
-            //Placement = PlacementMode.MousePoint
+            Padding = new Thickness(5, 2),
+            FontSize = 10
         };
 
         // Initialize editor
@@ -202,15 +206,12 @@ public class CodeEditor : UserControl
 
         var rootGrid = new Grid();
 
-        // 2. Definícia riadkov (Hlavička = Auto, Editor = Zvyšok)
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         rootGrid.RowDefinitions.Add(new RowDefinition(GridLength.Star));
 
-        // 3. Priradenie prvkov do konkrétnych riadkov Gridu
-        Grid.SetRow(_breadcrumbBar, 0); // Riadok 0 (hore)
-        Grid.SetRow(_editor, 1);        // Riadok 1 (pod breadcrumbom)
+        Grid.SetRow(_breadcrumbBar, 0); 
+        Grid.SetRow(_editor, 1);        
 
-        // 4. Pridanie prvkov ako Children do Gridu
         rootGrid.Children.Add(_breadcrumbBar);
         rootGrid.Children.Add(_editor);
 
@@ -222,8 +223,7 @@ public class CodeEditor : UserControl
         DetachedFromVisualTree += (_, _) => SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
         ApplyEditorSettings();
 
-        // 5. Nastavenie Gridu ako hlavný obsah widgetu
-        Content = rootGrid;
+        return rootGrid;
     }
 
     private void ConfigureEditorOptions()

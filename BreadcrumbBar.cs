@@ -25,15 +25,20 @@ public class BreadcrumbItem
 
 public class BreadcrumbBar : UserControl
 {
-    private readonly ScrollViewer _scrollViewer;
-    private readonly StackPanel _container;
-    private readonly Border _rootBorder;
+    private ScrollViewer _scrollViewer;
+    private StackPanel _container;
+    private Border _rootBorder;
     private SyntaxNode? _currentRoot;
     private int _currentOffset;
     
     public event EventHandler<BreadcrumbItem>? BreadcrumbClicked;
 
     public BreadcrumbBar()
+    {
+        Content = Build();
+    }
+
+    private object Build()
     {
         _container = new StackPanel 
         { 
@@ -60,7 +65,7 @@ public class BreadcrumbBar : UserControl
             Height = 24
         };
 
-        Content = _rootBorder;
+        return _rootBorder;
     }
 
     public void Update(SyntaxNode? root, int offset)
