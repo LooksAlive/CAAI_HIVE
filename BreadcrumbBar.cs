@@ -39,7 +39,7 @@ public class BreadcrumbBar : UserControl
         { 
             Orientation = Orientation.Horizontal, 
             Spacing = 6, 
-            Margin = new Thickness(4, 2),
+            Margin = new Thickness(0, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
 
@@ -57,7 +57,7 @@ public class BreadcrumbBar : UserControl
             BorderThickness = new Thickness(0, 0, 0, 1),
             BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Child = _scrollViewer,
-            Height = 8
+            Height = 24
         };
 
         Content = _rootBorder;
@@ -195,7 +195,7 @@ public class BreadcrumbBar : UserControl
         var icon = new TextBlock
         {
             Text = GetNodeIcon(item.Kind),
-            FontSize = 10,
+            FontSize = 14,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = isRoot ? new Thickness(0) : new Thickness(0)
         };
@@ -204,7 +204,7 @@ public class BreadcrumbBar : UserControl
         var text = new TextBlock
         {
             Text = item.Name,
-            FontSize = 10,
+            FontSize = 14,
             Foreground = isRoot ? new SolidColorBrush(Color.FromRgb(86, 156, 214)) : Brushes.White,
             VerticalAlignment = VerticalAlignment.Center,
             FontWeight = isRoot ? FontWeight.Bold : FontWeight.Normal
@@ -256,7 +256,7 @@ public class BreadcrumbBar : UserControl
             Child = new TextBlock
             {
                 Text = "›",
-                FontSize = 10,
+                FontSize = 16,
                 Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
                 VerticalAlignment = VerticalAlignment.Center
             },
