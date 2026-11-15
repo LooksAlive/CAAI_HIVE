@@ -158,10 +158,10 @@ namespace MyApp.Example
                 var (x, y) = p;
                 var quadrant = (x, y) switch
                 {
-                    (> 0, > 0) => "I",
-                    (< 0, > 0) => "II",
-                    (< 0, < 0) => "III",
-                    (> 0, < 0) => "IV",
+                    ( > 0, > 0) => "I",
+                    ( < 0, > 0) => "II",
+                    ( < 0, < 0) => "III",
+                    ( > 0, < 0) => "IV",
                     _ => "Axis"
                 };
                 Console.WriteLine($"Point {p} is in quadrant {quadrant}");

@@ -38,8 +38,8 @@ public class BreadcrumbBar : UserControl
         _container = new StackPanel 
         { 
             Orientation = Orientation.Horizontal, 
-            Spacing = 4, 
-            Margin = new Thickness(8, 4),
+            Spacing = 6, 
+            Margin = new Thickness(4, 2),
             VerticalAlignment = VerticalAlignment.Center
         };
 
@@ -57,7 +57,7 @@ public class BreadcrumbBar : UserControl
             BorderThickness = new Thickness(0, 0, 0, 1),
             BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
             Child = _scrollViewer,
-            Height = 32
+            Height = 8
         };
 
         Content = _rootBorder;
@@ -195,7 +195,7 @@ public class BreadcrumbBar : UserControl
         var icon = new TextBlock
         {
             Text = GetNodeIcon(item.Kind),
-            FontSize = 12,
+            FontSize = 10,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = isRoot ? new Thickness(0) : new Thickness(0)
         };
@@ -204,7 +204,7 @@ public class BreadcrumbBar : UserControl
         var text = new TextBlock
         {
             Text = item.Name,
-            FontSize = 12,
+            FontSize = 10,
             Foreground = isRoot ? new SolidColorBrush(Color.FromRgb(86, 156, 214)) : Brushes.White,
             VerticalAlignment = VerticalAlignment.Center,
             FontWeight = isRoot ? FontWeight.Bold : FontWeight.Normal
@@ -215,7 +215,7 @@ public class BreadcrumbBar : UserControl
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 4,
+                Spacing = 6,
                 Children = { icon, text }
             },
             Background = Brushes.Transparent,
@@ -256,7 +256,7 @@ public class BreadcrumbBar : UserControl
             Child = new TextBlock
             {
                 Text = "›",
-                FontSize = 14,
+                FontSize = 10,
                 Foreground = new SolidColorBrush(Color.FromRgb(128, 128, 128)),
                 VerticalAlignment = VerticalAlignment.Center
             },

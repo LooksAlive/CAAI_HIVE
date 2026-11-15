@@ -848,7 +848,7 @@ public partial class MainWindow : Window
         var root = new HotReloadRoot(BuildUI);
         Content = root;
         HotReloadService.Register(root);
-        currentSyntaxTree = OpenFile(Path.Combine(_baseDir, "Program.cs"));
+        currentSyntaxTree = OpenFile(Path.Combine(_baseDir, "test.cs")); // Program
         SetupStructureTreeContent();
         _tabs.SelectionChanged += OnEditorTabSelectionChanged;
         _tabs.GotFocus += OnEditorGotFocus;
