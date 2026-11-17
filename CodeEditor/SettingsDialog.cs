@@ -47,6 +47,9 @@ public class SettingsData
     public bool SendTelemetry { get; set; } = false;
     public string Language { get; set; } = "en-US";
     public string? RecentProjects { get; set; }
+    public List<string> RecentProjectPaths { get; set; } = new();
+    public string DevelopmentDefaultProjectPath { get; set; } = @"C:\Users\A200542365\OneDrive - Deutsche Telekom AG\Desktop\CAAI_HIVE";
+    public string? LastProjectPath { get; set; }
 
     public event EventHandler? SettingsChanged;
 
@@ -82,6 +85,32 @@ public class SettingsData
         {
             return Instance;
         }
+    }
+
+    public IReadOnlyList<string> GetRecentProjectPaths()
+    {
+        if (RecentProjectPaths.Count > 0) return RecentProjectPaths;
+        if (string.IsNullOrWhiteSpace(RecentProjects)) return Array.Empty<string>();
+        try
+        {
+            return JsonSerializer.Deserialize<List<string>>(RecentProjects) ?? new List<string>();
+        }
+        catch (JsonException)
+        {
+            return new[] { RecentProjects };
+        }
+    }
+
+    public void SetRecentProjectPaths(IEnumerable<string> paths)
+    {
+        var recent = paths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(10)
+            .ToArray();
+        RecentProjectPaths = recent.ToList();
+        RecentProjects = null;
     }
 
     public void CopyFrom(SettingsData other)
@@ -579,7 +608,7 @@ public class SettingsDialog : Window
         };
         clearRecentBtn.Click += (_, _) =>
         {
-            _settings.RecentProjects = null;
+            _settings.SetRecentProjectPaths(Array.Empty<string>());
         };
         clearRecentPanel.Children.Add(clearRecentBtn);
 

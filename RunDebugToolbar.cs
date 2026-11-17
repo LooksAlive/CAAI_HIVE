@@ -226,7 +226,7 @@ public sealed class RunDebugToolbar : UserControl
         {
             BorderThickness = new Thickness(0, 0, 0, 1),
             BorderBrush = ResourceBrush("ControlBorderBrush", Brushes.Gray),
-            Background = ResourceBrush("ToolBarBackground", Brushes.Transparent),
+            Background = new SolidColorBrush(Color.FromRgb(38, 38, 42)),
             Child = stack
         };
 

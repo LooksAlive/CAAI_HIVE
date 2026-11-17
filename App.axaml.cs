@@ -239,8 +239,7 @@ public partial class MainWindow : Window
 
     SyntaxTree? currentSyntaxTree = null;
 
-    private static string _baseDir = "C:\\Users\\A200542365\\OneDrive - Deutsche Telekom AG\\Desktop\\CAAI_HIVE";
-    //private static string _baseDir = "/home/adam/Desktop/CAAI_HIVE";
+    private static string _baseDir = GetInitialProjectPath();
     private string _gitDirectory = _baseDir;
     public CodeWatcher? CodeWatcher = Environment.GetEnvironmentVariable("DOTNET_WATCH") == "1"
         ? null
@@ -281,36 +280,118 @@ public partial class MainWindow : Window
 
     private async Task LoadProjectFromFolder(string folderPath)
     {
-        // 1. Get all .cs files in the directory and subdirectories
-        var files = Directory.GetFiles(folderPath, "*.cs", SearchOption.AllDirectories);
+        folderPath = Path.GetFullPath(folderPath);
+        if (!Directory.Exists(folderPath))
+            throw new DirectoryNotFoundException($"Project folder does not exist: {folderPath}");
+        if (_debugSession.IsActive)
+            throw new InvalidOperationException("Stop the current debug session before opening another project.");
+        if (_runner.IsRunning)
+            throw new InvalidOperationException("Stop the running process before opening another project.");
 
-        foreach (var filePath in files)
+        var openEditors = OpenCodeEditors().ToArray();
+        if (openEditors.Any(editor => !File.Exists(editor.FilePath) || File.ReadAllText(editor.FilePath) != editor.GetText()))
+            throw new InvalidOperationException("Save or close modified editor tabs before opening another project.");
+
+        var files = GetProjectSourceFiles(folderPath);
+        var sources = new List<(string Path, string Content)>(files.Length);
+        foreach (var file in files)
+            sources.Add((Path.GetFullPath(file), await File.ReadAllTextAsync(file)));
+
+        var solution = _workspace.CurrentSolution;
+        var oldDocumentIds = solution.GetProject(_projectId)?.DocumentIds.ToArray() ?? Array.Empty<DocumentId>();
+        foreach (var documentId in oldDocumentIds)
+            solution = solution.RemoveDocument(documentId);
+
+        foreach (var tab in _tabs.Items.OfType<TabItem>().Where(tab => FindEditorInContent(tab.Content) != null).ToArray())
+            _tabs.Items.Remove(tab);
+
+        foreach (var (filePath, source) in sources)
         {
-            if (_workspace.CurrentSolution.GetDocumentIdsWithFilePath(Path.GetFullPath(filePath)).Any())
-                continue;
-
-            // 2. Read the file content from disk once
-            string code = await File.ReadAllTextAsync(filePath);
-
-            // 3. Create a DocumentId and add it to your existing project
-            var docId = DocumentId.CreateNewId(_projectId);
-
-            // 4. Update the current solution in memory
-            var oldSolution = _workspace.CurrentSolution;
-            var newSolution = oldSolution.AddDocument(docId, Path.GetFileName(filePath), code)
-                .WithDocumentFilePath(docId, Path.GetFullPath(filePath));
-
-            // Apply the change so the workspace "knows" about the file
-            if (_workspace.TryApplyChanges(newSolution))
-            {
-                // Optional: Map the file path to the DocId so you can find it later
-                // _pathMap[filePath] = docId;
-            }
+            var documentId = DocumentId.CreateNewId(_projectId);
+            solution = solution.AddDocument(documentId, Path.GetFileName(filePath), source)
+                .WithDocumentFilePath(documentId, filePath);
         }
 
-        _nuGetPackageManager.SetProjectFolder(folderPath);
+        if (!_workspace.TryApplyChanges(solution))
+            throw new InvalidOperationException("The project files could not be loaded into the workspace.");
+
+        _baseDir = folderPath;
         _gitDirectory = folderPath;
+        _filesTreeView.SetRootPath(folderPath);
+        _terminal.SetWorkingDirectory(folderPath);
+        _nuGetPackageManager.SetProjectFolder(folderPath);
         _gitWidget.SetDirectory(folderPath);
+        CodeWatcher?.ChangePath(folderPath);
+
+        var debugProjects = Directory.GetFiles(folderPath, "*.csproj", SearchOption.TopDirectoryOnly);
+        _debugProjectPath = debugProjects.Length == 1 ? Path.GetFullPath(debugProjects[0]) : null;
+        _debugPanel.SetProject(_debugProjectPath ?? string.Empty);
+
+        _hierarchyCompilation = null;
+        _selectedHierarchyTypeName = null;
+        currentSyntaxTree = null;
+        _structureTree.SetStructure(CSharpSyntaxTree.ParseText(string.Empty));
+        _astViewer.SyntaxTree = null;
+        RememberProjectFolder(folderPath);
+        _ = RefreshClassHierarchyAsync();
+        UpdateStatusBar();
+        ShowNotification("Project loaded", $"{Path.GetFileName(folderPath)} ({sources.Count} C# files)", NotificationType.Success);
+    }
+
+    private static string GetInitialProjectPath()
+    {
+        var settings = SettingsData.Instance;
+        if (!string.IsNullOrWhiteSpace(settings.LastProjectPath) && Directory.Exists(settings.LastProjectPath))
+            return Path.GetFullPath(settings.LastProjectPath);
+        if (Directory.Exists(settings.DevelopmentDefaultProjectPath))
+            return Path.GetFullPath(settings.DevelopmentDefaultProjectPath);
+        return Environment.CurrentDirectory;
+    }
+
+    private static bool IsProjectSourceFile(string rootPath, string filePath)
+    {
+        var excludedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ".git", ".vs", "bin", "obj" };
+        return !Path.GetRelativePath(rootPath, filePath)
+            .Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries)
+            .Any(excludedDirectories.Contains);
+    }
+
+    private static string[] GetProjectSourceFiles(string rootPath) =>
+        Directory.EnumerateFiles(rootPath, "*.cs", SearchOption.AllDirectories)
+            .Where(file => IsProjectSourceFile(rootPath, file))
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private void RememberProjectFolder(string folderPath)
+    {
+        var settings = SettingsData.Instance;
+        var recent = settings.GetRecentProjectPaths()
+            .Where(Directory.Exists)
+            .Where(path => !string.Equals(path, folderPath, StringComparison.OrdinalIgnoreCase))
+            .Prepend(folderPath)
+            .ToArray();
+        settings.LastProjectPath = folderPath;
+        settings.SetRecentProjectPaths(recent);
+        _menu.SetRecentProjects(settings.GetRecentProjectPaths());
+        SaveApplicationSettings();
+    }
+
+    private void SaveApplicationSettings()
+    {
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(App.SettingsPath));
+            if (directory != null) Directory.CreateDirectory(directory);
+            SettingsData.Instance.Save(App.SettingsPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _notificationManager.Show(new Notification(
+                title: "Settings not saved",
+                message: exception.Message,
+                type: NotificationType.Warning,
+                expiration: TimeSpan.FromSeconds(5)));
+        }
     }
 
     private void InitializeRoslyn()
@@ -346,6 +427,17 @@ public partial class MainWindow : Window
         {
             // Handle failure if necessary
         }
+
+        var sourceSolution = _workspace.CurrentSolution;
+        foreach (var filePath in GetProjectSourceFiles(_baseDir))
+        {
+            var fullPath = Path.GetFullPath(filePath);
+            var documentId = DocumentId.CreateNewId(_projectId);
+            sourceSolution = sourceSolution.AddDocument(documentId, Path.GetFileName(fullPath), File.ReadAllText(fullPath))
+                .WithDocumentFilePath(documentId, fullPath);
+        }
+        if (!_workspace.TryApplyChanges(sourceSolution))
+            throw new InvalidOperationException("The default project sources could not be loaded into the workspace.");
     }
 
     public async Task PerformRename(ISymbol symbol, string newName)
@@ -845,7 +937,11 @@ public partial class MainWindow : Window
         var root = new HotReloadRoot(BuildUI);
         Content = root;
         HotReloadService.Register(root);
-        currentSyntaxTree = OpenFile(Path.Combine(_baseDir, "test.cs")); // Program
+        var startupFile = File.Exists(Path.Combine(_baseDir, "test.cs"))
+            ? Path.Combine(_baseDir, "test.cs")
+            : GetProjectSourceFiles(_baseDir).FirstOrDefault();
+        if (startupFile != null)
+            currentSyntaxTree = OpenFile(startupFile);
         SetupStructureTreeContent();
         _tabs.SelectionChanged += OnEditorTabSelectionChanged;
         _tabs.GotFocus += OnEditorGotFocus;
@@ -853,9 +949,12 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             SetStatusEditor(null);
+            CodeWatcher?.Dispose();
             SettingsData.Instance.SettingsChanged -= OnStatusSettingsChanged;
         };
         UpdateActiveStatusEditor();
+        if (Directory.Exists(_baseDir))
+            RememberProjectFolder(_baseDir);
     }
 
     private Control CreateStatusBar()
@@ -1151,6 +1250,7 @@ public partial class MainWindow : Window
     private void SetupMenuActions()
     {
         // === File Menu ===
+        _menu.SetRecentProjects(SettingsData.Instance.GetRecentProjectPaths().Where(Directory.Exists));
         _menu.OnNewNotebook += AddNotebookTab;
         _menu.OnNewProject += () => { /* TODO: Implement new project */ };
         _menu.OnOpenFile += async () =>
@@ -1179,35 +1279,43 @@ public partial class MainWindow : Window
             });
             if (folders.Count > 0)
             {
-                await LoadProjectFromFolder(folders[0].Path.LocalPath);
+                try
+                {
+                    await LoadProjectFromFolder(folders[0].Path.LocalPath);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+                {
+                    ShowProjectLoadError(exception.Message);
+                }
             }
         };
-        _menu.OnOpenRecentRequested += path =>
+        _menu.OnOpenRecentRequested += async path =>
         {
             if (File.Exists(path))
             {
                 OpenFile(path);
             }
+            else if (Directory.Exists(path))
+            {
+                try
+                {
+                    await LoadProjectFromFolder(path);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+                {
+                    ShowProjectLoadError(exception.Message);
+                }
+            }
             else
             {
-                // Show error or remove from recent
-                var toast = new Notification(
-                    title: "Warning",
-                    message: $"[Warning] Recent file not found: {path}",
-                    type: NotificationType.Warning,
-                    expiration: TimeSpan.FromSeconds(5),
-                    onClick: () => Console.WriteLine("User clicked the notification!"),
-                    onClose: () => Console.WriteLine("Notification dismissed.")
-                );
-
-                // Send to the manager screen container
-                _notificationManager.Show(toast);
+                ShowProjectLoadError($"Recent project or file not found: {path}");
             }
         };
         _menu.OnClearRecentRequested += () =>
         {
-            // Clear recent files list
-            // TODO: Implement persistent recent files clearing
+            SettingsData.Instance.SetRecentProjectPaths(Array.Empty<string>());
+            _menu.SetRecentProjects(Array.Empty<string>());
+            SaveApplicationSettings();
         };
         _menu.OnSaveFile += async () =>
         {
@@ -1221,7 +1329,15 @@ public partial class MainWindow : Window
                 var editor = FindEditorInContent(tab.Content);
                 if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
                 {
-                    File.WriteAllText(editor.FilePath, editor._editor.Text);
+                    try
+                    {
+                        File.WriteAllText(editor.FilePath, editor._editor.Text);
+                    }
+                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+                    {
+                        ShowNotification("Save failed", exception.Message, NotificationType.Error);
+                        return;
+                    }
                     var toast = new Notification(
                     title: "Info",
                     message: $"[Saved] {Path.GetFileName(editor.FilePath)}",
@@ -1239,23 +1355,29 @@ public partial class MainWindow : Window
         _menu.OnSaveAll += async () =>
         {
             var allSaved = true;
-            foreach (TabItem? tab in _tabs.Items)
+            try
             {
-                if (tab is null)
-                    continue;
-
-                if (tab.Content is NotebookWidget notebook)
+                foreach (TabItem? tab in _tabs.Items)
                 {
-                    if (!await notebook.SaveNotebookAsync())
-                        allSaved = false;
-                    continue;
-                }
+                    if (tab is null)
+                        continue;
 
-                var editor = FindEditorInContent(tab.Content);
-                if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
-                {
-                    File.WriteAllText(editor.FilePath, editor._editor.Text);
+                    if (tab.Content is NotebookWidget notebook)
+                    {
+                        if (!await notebook.SaveNotebookAsync())
+                            allSaved = false;
+                        continue;
+                    }
+
+                    var editor = FindEditorInContent(tab.Content);
+                    if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
+                        File.WriteAllText(editor.FilePath, editor._editor.Text);
                 }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                ShowNotification("Save All failed", exception.Message, NotificationType.Error);
+                return;
             }
             if (!allSaved) return;
             // Show error or remove from recent
@@ -1385,7 +1507,11 @@ public partial class MainWindow : Window
             SetOutputVisible(true);
             _outputTabs.SelectedItem = _nuGetTab;
         };
-        _menu.OnOpenSettings += async () => await ShowSettings();
+        _menu.OnOpenSettings += async () =>
+        {
+            await ShowSettings();
+            _menu.SetRecentProjects(SettingsData.Instance.GetRecentProjectPaths().Where(Directory.Exists));
+        };
 
         _menu.OnOpenAbout += () =>
         {
@@ -1446,6 +1572,14 @@ public partial class MainWindow : Window
             aboutDialog.ShowDialog(this);
         };
     }
+
+    private void ShowProjectLoadError(string message)
+    {
+        ShowNotification("Project not opened", message, NotificationType.Warning);
+    }
+
+    private void ShowNotification(string title, string message, NotificationType type) =>
+        _notificationManager.Show(new Notification(title, message, type, expiration: TimeSpan.FromSeconds(5)));
 
     private async Task ShowSettings()
     {

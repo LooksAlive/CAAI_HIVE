@@ -3,19 +3,20 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Media;
 using System.Text;
 using Avalonia.Layout;
 using Avalonia.VisualTree;
+using Avalonia.Styling;
 
 namespace CAAI;
 
 public class FileSystemNode : INotifyPropertyChanged
 {
     private bool _isExpanded;
-    private bool _isSelected;
     private bool _hasLoaded = false;
     private string _name;
 
@@ -41,12 +42,6 @@ public class FileSystemNode : INotifyPropertyChanged
         }
     }
     
-    public bool IsSelected
-    {
-        get => _isSelected;
-        set { _isSelected = value; OnPropertyChanged(); }
-    }
-
     public FileSystemNode(string path, bool isDirectory)
     {
         FullPath = path;
@@ -115,11 +110,18 @@ public class FileExplorerWidget : UserControl
             ItemsSource = new[] { _rootNode },
             ItemTemplate = CreateTemplate()
         };
+        _treeView.Styles.Add(new Style(selector => selector.OfType<TreeViewItem>().Class(":selected"))
+        {
+            Setters =
+            {
+                new Setter(TemplatedControl.BackgroundProperty, new SolidColorBrush(Color.FromRgb(42, 68, 64))),
+                new Setter(TemplatedControl.ForegroundProperty, Brushes.White)
+            }
+        });
     
         // Handle expansion to load children
         _treeView.AddHandler(TreeViewItem.ExpandedEvent, OnTreeViewItemExpanded);
     
-        _treeView.SelectionChanged += OnTreeSelectionChanged;
         _treeView.KeyDown += OnTreeKeyDown;
     
         Content = _treeView;
@@ -153,15 +155,15 @@ public class FileExplorerWidget : UserControl
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
             Margin = new Thickness(2),
-            Background = node.IsSelected ? new SolidColorBrush(Color.FromArgb(80, 100, 100, 255)) : Brushes.Transparent
+            Background = Brushes.Transparent
         };
 
         // Icon
         var icon = new TextBlock
         {
             Text = GetFileIcon(node),
-            FontSize = 14,
-            Margin = new Thickness(0, 0, 8, 0),
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center
         };
 
@@ -171,7 +173,7 @@ public class FileExplorerWidget : UserControl
             Text = node.Name,
             Foreground = node.IsDirectory ? Brushes.LightSkyBlue : Brushes.White,
             VerticalAlignment = VerticalAlignment.Center,
-            FontWeight = node.IsSelected ? FontWeight.Bold : FontWeight.Normal
+            FontSize = 12
         };
 
         // Size info (for files)
@@ -182,7 +184,7 @@ public class FileExplorerWidget : UserControl
             var sizeLabel = new TextBlock
             {
                 Text = sizeText,
-                FontSize = 10,
+                FontSize = 9,
                 Foreground = Brushes.Gray,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(8, 0, 0, 0)
@@ -199,14 +201,9 @@ public class FileExplorerWidget : UserControl
         // Hover effect
         grid.PointerEntered += (_, _) =>
         {
-            if (!node.IsSelected)
-                grid.Background = new SolidColorBrush(Color.FromArgb(50, 100, 100, 100));
+            grid.Background = new SolidColorBrush(Color.FromArgb(50, 70, 130, 120));
         };
-        grid.PointerExited += (_, _) =>
-        {
-            if (!node.IsSelected)
-                grid.Background = Brushes.Transparent;
-        };
+        grid.PointerExited += (_, _) => grid.Background = Brushes.Transparent;
 
         // Only handle double-click for files (not directories)
         grid.DoubleTapped += (_, e) =>
@@ -224,9 +221,7 @@ public class FileExplorerWidget : UserControl
         grid.PointerPressed += (_, e) =>
         {
             if (e.Pointer.Type == PointerType.Mouse && e.GetCurrentPoint(grid).Properties.IsRightButtonPressed)
-            {
-                node.IsSelected = true;
-            }
+                _treeView.SelectedItem = node;
         };
 
         return grid;
@@ -586,14 +581,6 @@ public class FileExplorerWidget : UserControl
         return null;
     }
 
-    private void OnTreeSelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (_treeView.SelectedItem is FileSystemNode node)
-        {
-            node.IsSelected = true;
-        }
-    }
-
     private async void OnTreeKeyDown(object? sender, KeyEventArgs e)
     {
         if (_treeView.SelectedItem is FileSystemNode node)
@@ -684,6 +671,13 @@ namespace {{Namespace}}
     public void RefreshAll()
     {
         _rootNode.Refresh();
+    }
+
+    public void SetRootPath(string rootPath)
+    {
+        BaseDir = Path.GetFullPath(rootPath);
+        _rootNode = new FileSystemNode(BaseDir, true);
+        _treeView.ItemsSource = new[] { _rootNode };
     }
 }
 

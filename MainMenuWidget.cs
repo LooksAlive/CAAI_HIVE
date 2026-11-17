@@ -31,6 +31,36 @@ public partial class MainMenuWidget : UserControl
 
     public void SetOutputVisible(bool visible) => MenuToggleOutput.IsChecked = visible;
 
+    public void SetRecentProjects(IEnumerable<string> paths)
+    {
+        MenuRecentProjects.Items.Clear();
+        var recentProjects = paths.Take(10).ToArray();
+        if (recentProjects.Length == 0)
+        {
+            MenuRecentProjects.Items.Add(new MenuItem { Header = "No recent projects", IsEnabled = false, Foreground = Avalonia.Media.Brushes.Gray });
+            return;
+        }
+
+        foreach (var path in recentProjects)
+        {
+            var parent = Path.GetFileName(Path.GetDirectoryName(path)?.TrimEnd(Path.DirectorySeparatorChar));
+            var folder = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+            var item = new MenuItem
+            {
+                Header = string.IsNullOrEmpty(parent) ? folder : $"{folder}  -  {parent}",
+                Foreground = Avalonia.Media.Brushes.White
+            };
+            ToolTip.SetTip(item, path);
+            item.Click += (_, _) => OnOpenRecentRequested?.Invoke(path);
+            MenuRecentProjects.Items.Add(item);
+        }
+
+        MenuRecentProjects.Items.Add(new Separator());
+        var clearRecent = new MenuItem { Header = "Clear Recent List", Foreground = Avalonia.Media.Brushes.White };
+        clearRecent.Click += (_, _) => OnClearRecentRequested?.Invoke();
+        MenuRecentProjects.Items.Add(clearRecent);
+    }
+
     public event Action? OnRunProject;
     public event Action? OnRunNoDebug;
     public event Action? OnStepInto;
@@ -71,11 +101,6 @@ public partial class MainMenuWidget : UserControl
         MenuSaveFile.Click    += (s, e) => OnSaveFile?.Invoke();
         MenuSaveAll.Click     += (s, e) => OnSaveAll?.Invoke();
         MenuExit.Click        += (s, e) => OnExit?.Invoke();
-
-        // Recent items execution
-        MenuRecent1.Click     += (s, e) => OnOpenRecentRequested?.Invoke(MenuRecent1.Header?.ToString() ?? "");
-        MenuRecent2.Click     += (s, e) => OnOpenRecentRequested?.Invoke(MenuRecent2.Header?.ToString() ?? "");
-        MenuClearRecent.Click += (s, e) => OnClearRecentRequested?.Invoke();
 
         // === Edit Subscriptions ===
         MenuUndo.Click          += (s, e) => OnUndo?.Invoke();

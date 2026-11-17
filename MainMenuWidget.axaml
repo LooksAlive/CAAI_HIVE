@@ -12,11 +12,8 @@
                 <MenuItem Header="_Open File..." InputGesture="Ctrl+O" Name="MenuOpenFile" Foreground="White"/>
                 <MenuItem Header="Open P_roject..." InputGesture="Ctrl+Shift+O" Name="MenuOpenProject" Foreground="White"/>
                 
-                <MenuItem Header="Open _Recent" Foreground="White">
-                    <MenuItem Header="~/Desktop/HIVE" Name="MenuRecent1" Foreground="Gray"/>
-                    <MenuItem Header="~/Projects/CAAI_Core" Name="MenuRecent2" Foreground="Gray"/>
-                    <Separator/>
-                    <MenuItem Header="Clear Recent List" Name="MenuClearRecent" Foreground="White"/>
+                <MenuItem Header="Open _Recent" Name="MenuRecentProjects" Foreground="White">
+                    <MenuItem Header="No recent projects" IsEnabled="False" Foreground="Gray"/>
                 </MenuItem>
                 
                 <Separator/>

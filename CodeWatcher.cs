@@ -4,16 +4,27 @@ using System.Threading;
 
 namespace CAAI;
 
-public class CodeWatcher
+public class CodeWatcher : IDisposable
 {
-    private readonly FileSystemWatcher _watcher;
+    private FileSystemWatcher? _watcher;
     private readonly Action<string> _onChanged;
     private Timer? _debounceTimer;
-    private string? _lastFile;
+    private int _watcherGeneration;
 
     public CodeWatcher(string path, Action<string> onChanged)
     {
         _onChanged = onChanged;
+        ChangePath(path);
+    }
+
+    public void ChangePath(string path)
+    {
+        Interlocked.Increment(ref _watcherGeneration);
+        _debounceTimer?.Dispose();
+        _debounceTimer = null;
+        _watcher?.Dispose();
+        _watcher = null;
+        if (!Directory.Exists(path)) return;
 
         _watcher = new FileSystemWatcher(path)
         {
@@ -26,15 +37,24 @@ public class CodeWatcher
         _watcher.EnableRaisingEvents = true;
     }
 
+    public void Dispose()
+    {
+        Interlocked.Increment(ref _watcherGeneration);
+        _debounceTimer?.Dispose();
+        _watcher?.Dispose();
+    }
+
     private void OnChanged(object sender, FileSystemEventArgs e)
     {
-        _lastFile = e.FullPath;
+        var file = e.FullPath;
+        var generation = Volatile.Read(ref _watcherGeneration);
 
         // debounce (avoid multiple triggers)
         _debounceTimer?.Dispose();
         _debounceTimer = new Timer(_ =>
         {
-            _onChanged(_lastFile);
+            if (generation == Volatile.Read(ref _watcherGeneration))
+                _onChanged(file);
         }, null, 300, Timeout.Infinite);
     }
 }
