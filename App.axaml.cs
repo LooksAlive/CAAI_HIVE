@@ -12,6 +12,7 @@ using Avalonia.Input;
 using AvaloniaEdit;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Rename;
 using Microsoft.CodeAnalysis.Text;
@@ -184,13 +185,6 @@ public static class DialogHelper
     }
 }
 
-public class HierarchyNode
-{
-    public string Name { get; set; } = "";
-    public string FullName { get; set; } = "";
-    public List<HierarchyNode> DerivedTypes { get; set; } = [];
-}
-
 public partial class MainWindow : Window
 {
     private TabControl _tabs = new TabControl
@@ -229,7 +223,10 @@ public partial class MainWindow : Window
     private TabItem _nuGetTab = null!;
     private TerminalWidget _terminal = null!;
     private MainMenuWidget _menu = new();
-    private TreeView _hierarchyTree = null!;
+    private ClassHierarchyWidget _hierarchyTree = null!;
+    private Compilation? _hierarchyCompilation;
+    private int _hierarchyRefreshVersion;
+    private string? _selectedHierarchyTypeName;
     private EnvironmentWidget _env = null!;
     private AstViewer _astViewer = new();
     private DotnetRunner _runner;
@@ -899,7 +896,8 @@ public partial class MainWindow : Window
 
     private void OnEditorTabSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
-        if (ReferenceEquals(e.Source, _tabs)) UpdateActiveStatusEditor();
+        if (!ReferenceEquals(e.Source, _tabs)) return;
+        UpdateActiveStatusEditor();
     }
 
     private void OnEditorGotFocus(object? sender, RoutedEventArgs e)
@@ -913,6 +911,7 @@ public partial class MainWindow : Window
     {
         var tab = _tabs.SelectedItem as TabItem;
         SetStatusEditor(tab?.Content as TextEditor ?? FindEditorInContent(tab?.Content)?._editor);
+        if (_hierarchyTree?.IsFollowingCaret == true) _ = RefreshClassHierarchyAsync();
     }
 
     private void SetStatusEditor(TextEditor? editor)
@@ -934,7 +933,12 @@ public partial class MainWindow : Window
         if (_activeSideView == "AST") RefreshActiveAst();
     }
 
-    private void OnStatusEditorChanged(object? sender, EventArgs e) => UpdateStatusBar();
+    private void OnStatusEditorChanged(object? sender, EventArgs e)
+    {
+        UpdateStatusBar();
+        if (_hierarchyTree?.IsFollowingCaret == true || _selectedHierarchyTypeName != null)
+            _ = RefreshClassHierarchyAsync();
+    }
 
     private void OnStatusSettingsChanged(object? sender, EventArgs e) =>
         Dispatcher.UIThread.Post(UpdateStatusBar);
@@ -1074,18 +1078,8 @@ public partial class MainWindow : Window
         DockPanel.SetDock(_toolbar, Dock.Top);
         rootLayout.Children.Add(_toolbar);
 
-        // Create class hierarchy
-        _hierarchyTree = new TreeView
-        {
-            Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-            Foreground = Brushes.White,
-            ItemTemplate = new FuncTreeDataTemplate<HierarchyNode>(
-                _ => true,
-                (node, _) => new TextBlock { Text = $"○ {node.Name}", Margin = new Thickness(2) },
-                node => node.DerivedTypes
-            ),
-            ItemsSource = BuildClassHierarchy()
-        };
+        _hierarchyTree = new ClassHierarchyWidget();
+        SetupClassHierarchy();
 
         SetupEnvironment();
         SetupStructureTree();
@@ -1714,51 +1708,100 @@ public partial class MainWindow : Window
         _tabs.SelectedItem = tab; // Switch to the new notebook
     }
 
-    private List<HierarchyNode> BuildClassHierarchy()
+    private void SetupClassHierarchy()
     {
-        var hierarchy = new List<HierarchyNode>();
-
-        // Get all named types (classes, interfaces, etc.) from the assembly being compiled
-        //var allTypes = GetCurrentCompilation().Result?.GlobalNamespace
-        var allTypes = GetCurrentCompilation().Result?.Assembly.GlobalNamespace
-            .GetAllTypes()
-            .Where(t => t.TypeKind == TypeKind.Class)
-            .ToList();
-
-        // Find "Root" classes (those whose base class is Object or not in our assembly)
-        if (allTypes == null || allTypes?.Count == 0) return hierarchy;
+        _hierarchyTree.TypePicked += symbol =>
         {
-            var rootTypes = allTypes?.Where(t =>
-                t.BaseType == null ||
-                t.BaseType.SpecialType == SpecialType.System_Object ||
-                !allTypes.Contains(t.BaseType, SymbolEqualityComparer.Default));
-            if (rootTypes == null) return hierarchy;
-            foreach (var rootType in rootTypes)
-            {
-                hierarchy.Add(BuildNodeRecursively(rootType, allTypes ?? []));
-            }
-        }
-
-        return hierarchy;
+            _selectedHierarchyTypeName = symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+            _ = RefreshClassHierarchyAsync(symbol);
+        };
+        _hierarchyTree.FollowCaretRequested += () =>
+        {
+            _selectedHierarchyTypeName = null;
+            _ = RefreshClassHierarchyAsync();
+        };
+        _ = RefreshClassHierarchyAsync();
     }
 
-    private HierarchyNode BuildNodeRecursively(INamedTypeSymbol symbol, List<INamedTypeSymbol> allTypes)
+    private async Task RefreshClassHierarchyAsync(INamedTypeSymbol? selectedType = null)
     {
-        var node = new HierarchyNode
-        {
-            Name = symbol.Name,
-            FullName = symbol.ToDisplayString()
-        };
+        var requestVersion = Interlocked.Increment(ref _hierarchyRefreshVersion);
+        var compilation = await GetCurrentCompilation();
+        if (compilation == null || requestVersion != Volatile.Read(ref _hierarchyRefreshVersion)) return;
 
-        // Find types that name this symbol as their BaseType
-        var derived = allTypes.Where(t => SymbolEqualityComparer.Default.Equals(t.BaseType, symbol));
+        var types = GetHierarchyTypes(compilation.Assembly.GlobalNamespace)
+            .Where(type => type.TypeKind == TypeKind.Class && !type.IsImplicitlyDeclared)
+            .ToList();
 
-        foreach (var child in derived)
+        if (_hierarchyTree.IsFollowingCaret)
         {
-            node.DerivedTypes.Add(BuildNodeRecursively(child, allTypes));
+            selectedType = await GetClassAtCaretAsync();
+            _selectedHierarchyTypeName = null;
+        }
+        else if (selectedType == null && _selectedHierarchyTypeName != null)
+        {
+            selectedType = types.FirstOrDefault(type =>
+                type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == _selectedHierarchyTypeName);
         }
 
-        return node;
+        if (requestVersion != Volatile.Read(ref _hierarchyRefreshVersion)) return;
+
+        if (!ReferenceEquals(_hierarchyCompilation, compilation))
+        {
+            _hierarchyCompilation = compilation;
+            _hierarchyTree.SetTypes(types, selectedType);
+        }
+
+        _hierarchyTree.ShowHierarchy(types, selectedType);
+    }
+
+    private static IEnumerable<INamedTypeSymbol> GetHierarchyTypes(INamespaceSymbol root)
+    {
+        foreach (var type in root.GetTypeMembers())
+        {
+            yield return type;
+            foreach (var nestedType in GetNestedHierarchyTypes(type))
+                yield return nestedType;
+        }
+
+        foreach (var childNamespace in root.GetNamespaceMembers())
+        {
+            foreach (var type in GetHierarchyTypes(childNamespace))
+                yield return type;
+        }
+    }
+
+    private static IEnumerable<INamedTypeSymbol> GetNestedHierarchyTypes(INamedTypeSymbol containingType)
+    {
+        foreach (var nestedType in containingType.GetTypeMembers())
+        {
+            yield return nestedType;
+            foreach (var childType in GetNestedHierarchyTypes(nestedType))
+                yield return childType;
+        }
+    }
+
+    private async Task<INamedTypeSymbol?> GetClassAtCaretAsync()
+    {
+        if (_tabs.SelectedItem is not TabItem activeTab || FindEditorInContent(activeTab.Content) is not CodeEditor editor)
+            return null;
+
+        var document = _workspace.CurrentSolution.GetDocument(editor.DocumentId);
+        if (document == null) return null;
+
+        var root = await document.GetSyntaxRootAsync();
+        var semanticModel = await document.GetSemanticModelAsync();
+        if (root == null || semanticModel == null || root.FullSpan.IsEmpty) return null;
+
+        var offset = Math.Clamp(editor._editor.CaretOffset, root.FullSpan.Start, root.FullSpan.End - 1);
+        var declaration = root.FindToken(offset).Parent?
+            .AncestorsAndSelf()
+            .OfType<TypeDeclarationSyntax>()
+            .FirstOrDefault();
+
+        if (declaration == null) return null;
+        var symbol = semanticModel.GetDeclaredSymbol(declaration) as INamedTypeSymbol;
+        return symbol?.TypeKind == TypeKind.Class ? symbol : null;
     }
 
     public async Task<List<Diagnostic>> GetDiagnosticsForDocument(DocumentId docId)
