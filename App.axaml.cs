@@ -242,8 +242,8 @@ public partial class MainWindow : Window
 
     SyntaxTree? currentSyntaxTree = null;
 
-    //private static string _baseDir = "C:\\Users\\A200542365\\OneDrive - Deutsche Telekom AG\\Desktop\\CAAI_HIVE";
-    private static string _baseDir = "/home/adam/Desktop/CAAI_HIVE";
+    private static string _baseDir = "C:\\Users\\A200542365\\OneDrive - Deutsche Telekom AG\\Desktop\\CAAI_HIVE";
+    //private static string _baseDir = "/home/adam/Desktop/CAAI_HIVE";
     private string _gitDirectory = _baseDir;
     public CodeWatcher? CodeWatcher = Environment.GetEnvironmentVariable("DOTNET_WATCH") == "1"
         ? null
