@@ -9,18 +9,21 @@ namespace CAAI;
 internal static class QuickActions
 {
     public static async Task<IReadOnlyList<CodeAction>> GetActionsAsync(
-        Document document, int caretOffset, CancellationToken cancellationToken)
+        Document document, int caretOffset, CancellationToken cancellationToken, bool includeDocumentActions = true)
     {
         var actions = new List<CodeAction>();
-        var text = await document.GetTextAsync(cancellationToken);
-        var formattedDocument = await Formatter.FormatAsync(document, cancellationToken: cancellationToken);
-        var formattedText = await formattedDocument.GetTextAsync(cancellationToken);
-        if (!text.ContentEquals(formattedText))
+        if (includeDocumentActions)
         {
-            actions.Add(CodeAction.Create(
-                "Format document",
-                _ => Task.FromResult(formattedDocument),
-                equivalenceKey: "FormatDocument"));
+            var text = await document.GetTextAsync(cancellationToken);
+            var formattedDocument = await Formatter.FormatAsync(document, cancellationToken: cancellationToken);
+            var formattedText = await formattedDocument.GetTextAsync(cancellationToken);
+            if (!text.ContentEquals(formattedText))
+            {
+                actions.Add(CodeAction.Create(
+                    "Format document",
+                    _ => Task.FromResult(formattedDocument),
+                    equivalenceKey: "FormatDocument"));
+            }
         }
 
         var root = await document.GetSyntaxRootAsync(cancellationToken);

@@ -53,6 +53,8 @@ public class CodeEditor : UserControl
     private readonly Brush _lineNumberForeground = new SolidColorBrush(Color.FromRgb(128, 128, 128));
     private readonly Brush _foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220));
     private readonly Brush _background = new SolidColorBrush(Color.FromRgb(30, 30, 35));
+    private QuickActionMargin? _quickActionMargin;
+    private CancellationTokenSource? _quickActionRefresh;
 
     public string FilePath { get; private set; }
     public string Code { get; private set; }
@@ -137,6 +139,7 @@ public class CodeEditor : UserControl
             var newSolution = _workspace.CurrentSolution.WithDocumentText(_documentId, sourceText);
             _workspace.TryApplyChanges(newSolution);
             TextChanged?.Invoke(this, _editor.Text);
+            ScheduleQuickActionRefresh();
         }
         finally
         {
@@ -144,9 +147,58 @@ public class CodeEditor : UserControl
         }
     }
 
+    private void OnCaretPositionChanged(object? sender, EventArgs e) => ScheduleQuickActionRefresh();
+
+    private void ScheduleQuickActionRefresh()
+    {
+        if (_quickActionMargin is null || this.GetVisualRoot() is null) return;
+
+        _quickActionRefresh?.Cancel();
+        _quickActionRefresh?.Dispose();
+        var refresh = new CancellationTokenSource();
+        _quickActionRefresh = refresh;
+        _quickActionMargin.SetActionLine(null);
+        _ = RefreshQuickActionMarkerAsync(refresh.Token);
+    }
+
+    private async Task RefreshQuickActionMarkerAsync(CancellationToken cancellationToken)
+    {
+        var caretOffset = _editor.CaretOffset;
+        var caretLine = _editor.TextArea.Caret.Line;
+        var snapshot = _editor.Text ?? string.Empty;
+        try
+        {
+            await Task.Delay(180, cancellationToken);
+            var document = _workspace.CurrentSolution.GetDocument(_documentId);
+            if (document is null) return;
+            document = document.WithText(SourceText.From(snapshot));
+            var actions = await QuickActions.GetActionsAsync(
+                document, caretOffset, cancellationToken, includeDocumentActions: false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if ((_editor.Text ?? string.Empty) != snapshot ||
+                _editor.TextArea.Caret.Line != caretLine || this.GetVisualRoot() is null)
+                return;
+
+            _quickActionMargin?.SetActionLine(actions.Count > 0 ? caretLine : null);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Quick action marker refresh failed: {exception.Message}");
+            _quickActionMargin?.SetActionLine(null);
+        }
+    }
+
     public void CloseEditor()
     {
         _breakpointMargin?.Dispose();
+        _quickActionRefresh?.Cancel();
+        _quickActionRefresh?.Dispose();
+        _quickActionMargin?.Dispose();
+        _editor.TextArea.Caret.PositionChanged -= OnCaretPositionChanged;
         _editor.TextChanged -= OnTextChanged;
         var solution = _workspace.CurrentSolution.RemoveDocument(_documentId);
         _workspace.TryApplyChanges(solution);
@@ -199,6 +251,11 @@ public class CodeEditor : UserControl
         ConfigureEditorOptions();
         _editor.TextArea.TextView.BackgroundRenderers.Add(_diagnosticRenderer);
         SetupEventHandlers();
+        if (FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            _quickActionMargin = new QuickActionMargin(_editor, () => _ = ShowQuickActionsAsync());
+            _editor.TextArea.LeftMargins.Insert(0, _quickActionMargin);
+        }
         SetupFolding();
         SetupContextMenu();
 
@@ -219,8 +276,13 @@ public class CodeEditor : UserControl
         {
             SettingsData.Instance.SettingsChanged += OnSettingsChanged;
             ApplyEditorSettings();
+            ScheduleQuickActionRefresh();
         };
-        DetachedFromVisualTree += (_, _) => SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
+        DetachedFromVisualTree += (_, _) =>
+        {
+            SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
+            _quickActionRefresh?.Cancel();
+        };
         ApplyEditorSettings();
 
         return rootGrid;
@@ -301,6 +363,71 @@ public class CodeEditor : UserControl
         }
     }
 
+    private sealed class QuickActionMargin : Control, IDisposable
+    {
+        private readonly TextEditor _editor;
+        private readonly Action _onInvoked;
+        private int? _actionLine;
+
+        public QuickActionMargin(TextEditor editor, Action onInvoked)
+        {
+            _editor = editor;
+            _onInvoked = onInvoked;
+            Width = 18;
+            ToolTip.SetTip(this, "Quick actions available (Ctrl+.)");
+            Avalonia.Automation.AutomationProperties.SetName(this, "Quick actions gutter");
+        }
+
+        public void SetActionLine(int? line)
+        {
+            _actionLine = line;
+            Cursor = line.HasValue ? new Cursor(StandardCursorType.Hand) : null;
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            base.OnPointerPressed(e);
+            if (_actionLine is not { } actionLine || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                return;
+
+            var view = _editor.TextArea.TextView;
+            if (!view.VisualLinesValid) return;
+            var position = e.GetPosition(view);
+            var hitLine = view.VisualLines.FirstOrDefault(line =>
+                position.Y >= line.VisualTop - view.ScrollOffset.Y &&
+                position.Y < line.VisualTop - view.ScrollOffset.Y + line.Height);
+            if (hitLine is null || actionLine < hitLine.FirstDocumentLine.LineNumber ||
+                actionLine > hitLine.LastDocumentLine.LineNumber)
+                return;
+
+            _onInvoked();
+            e.Handled = true;
+        }
+
+        public override void Render(DrawingContext context)
+        {
+            base.Render(context);
+            if (_actionLine is not { } actionLine) return;
+
+            var view = _editor.TextArea.TextView;
+            if (!view.VisualLinesValid) return;
+            var line = view.VisualLines.FirstOrDefault(candidate =>
+                actionLine >= candidate.FirstDocumentLine.LineNumber &&
+                actionLine <= candidate.LastDocumentLine.LineNumber);
+            if (line is null) return;
+
+            var center = new Point(9, line.GetTextLineVisualYPosition(line.TextLines[0], VisualYPosition.LineMiddle) - view.ScrollOffset.Y);
+            var brush = new SolidColorBrush(Color.FromRgb(255, 198, 76));
+            context.DrawEllipse(brush, null, center, 5, 5);
+            var pen = new Pen(brush, 1.5);
+            context.DrawLine(pen, new Point(center.X - 2, center.Y + 5), new Point(center.X + 2, center.Y + 5));
+            context.DrawLine(pen, new Point(center.X - 1, center.Y + 7), new Point(center.X + 1, center.Y + 7));
+        }
+
+        public void Dispose() => _editor.TextArea.LeftMargins.Remove(this);
+    }
+
     private void ApplyEditorSettings()
     {
         var settings = SettingsData.Instance;
@@ -319,6 +446,7 @@ public class CodeEditor : UserControl
     private void SetupEventHandlers()
     {
         _editor.TextChanged += OnTextChanged;
+        _editor.TextArea.Caret.PositionChanged += OnCaretPositionChanged;
         _editor.TextArea.TextEntered += TextArea_TextEntered;
         _editor.TextArea.TextEntering += TextArea_TextEntering;
 

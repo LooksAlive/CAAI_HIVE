@@ -743,6 +743,13 @@ public partial class MainWindow : Window
             Margin = new Thickness(10, 10, 8, 8),
             TextTrimming = TextTrimming.CharacterEllipsis
         };
+        var headingBar = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(38, 38, 42)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Child = heading
+        };
         var content = new ContentControl
         {
             Content = selectedView.View,
@@ -813,7 +820,7 @@ public partial class MainWindow : Window
             Content = tools
         };
         var viewPanel = new Grid { RowDefinitions = new RowDefinitions("Auto, *") };
-        viewPanel.Children.Add(heading);
+        viewPanel.Children.Add(headingBar);
         Grid.SetRow(content, 1);
         viewPanel.Children.Add(content);
         _sideTabs = new DockPanel();
