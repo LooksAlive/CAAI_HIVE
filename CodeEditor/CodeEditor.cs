@@ -1,28 +1,25 @@
 using System.Collections.Immutable;
+using System.Text.RegularExpressions;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
-using Avalonia.Media;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AvaloniaEdit;
 using AvaloniaEdit.CodeCompletion;
-using AvaloniaEdit.Highlighting;
+using AvaloniaEdit.Document;
 using AvaloniaEdit.Folding;
+using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Rendering;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.Completion;
-using Microsoft.CodeAnalysis.Text;
-using AvaloniaEdit.Editing;
-using AvaloniaEdit.Document;
-using System.Text.RegularExpressions;
-using Avalonia.Threading;
-using System;
-using Avalonia.Layout;
-using Avalonia.VisualTree;
-using Avalonia.Markup.Declarative;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
+using Microsoft.CodeAnalysis.Text;
 
 namespace CAAI;
 
@@ -55,9 +52,14 @@ public class CodeEditor : UserControl
     private readonly Brush _background = new SolidColorBrush(Color.FromRgb(30, 30, 35));
     private QuickActionMargin? _quickActionMargin;
     private CancellationTokenSource? _quickActionRefresh;
+    private ReferenceLensMargin? _referenceLensMargin;
+    private CancellationTokenSource? _referenceLensRefresh;
 
     public string FilePath { get; private set; }
     public string Code { get; private set; }
+    private string _savedText;
+    public bool IsDirty => !string.Equals(_editor.Text, _savedText, StringComparison.Ordinal);
+    public string? SaveError { get; private set; }
     private AdhocWorkspace _workspace;
     private DocumentId _documentId;
     private bool _isUpdating;
@@ -66,6 +68,7 @@ public class CodeEditor : UserControl
     public event EventHandler<string>? TextChanged;
     public event EventHandler? Saved;
     public event EventHandler? SaveRequested;
+    public event Action<bool>? DirtyStateChanged;
     private BreadcrumbBar _breadcrumbBar = new();
     private BreakpointMargin? _breakpointMargin;
 
@@ -139,7 +142,9 @@ public class CodeEditor : UserControl
             var newSolution = _workspace.CurrentSolution.WithDocumentText(_documentId, sourceText);
             _workspace.TryApplyChanges(newSolution);
             TextChanged?.Invoke(this, _editor.Text);
+            DirtyStateChanged?.Invoke(IsDirty);
             ScheduleQuickActionRefresh();
+            ScheduleReferenceLensRefresh();
         }
         finally
         {
@@ -147,7 +152,11 @@ public class CodeEditor : UserControl
         }
     }
 
-    private void OnCaretPositionChanged(object? sender, EventArgs e) => ScheduleQuickActionRefresh();
+    private void OnCaretPositionChanged(object? sender, EventArgs e)
+    {
+        ScheduleQuickActionRefresh();
+        ScheduleReferenceLensRefresh();
+    }
 
     private void ScheduleQuickActionRefresh()
     {
@@ -192,12 +201,75 @@ public class CodeEditor : UserControl
         }
     }
 
+    private void ScheduleReferenceLensRefresh()
+    {
+        if (_referenceLensMargin is null || this.GetVisualRoot() is null) return;
+
+        _referenceLensRefresh?.Cancel();
+        _referenceLensRefresh?.Dispose();
+        var refresh = new CancellationTokenSource();
+        _referenceLensRefresh = refresh;
+        _referenceLensMargin.Clear();
+        _ = RefreshReferenceLensAsync(refresh.Token);
+    }
+
+    private async Task RefreshReferenceLensAsync(CancellationToken cancellationToken)
+    {
+        var caretOffset = _editor.CaretOffset;
+        var caretLine = _editor.TextArea.Caret.Line;
+        var snapshot = _editor.Text ?? string.Empty;
+        try
+        {
+            await Task.Delay(250, cancellationToken);
+            var document = _workspace.CurrentSolution.GetDocument(_documentId);
+            if (document is null) return;
+            document = document.WithText(SourceText.From(snapshot));
+            var root = await document.GetSyntaxRootAsync(cancellationToken);
+            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
+            if (root is null || semanticModel is null || root.FullSpan.IsEmpty) return;
+
+            var offset = Math.Clamp(caretOffset, root.FullSpan.Start, root.FullSpan.End - 1);
+            var token = root.FindToken(offset);
+            var declaration = token.Parent?.AncestorsAndSelf().FirstOrDefault(node =>
+                node is BaseTypeDeclarationSyntax or MethodDeclarationSyntax or ConstructorDeclarationSyntax or
+                    PropertyDeclarationSyntax or EventDeclarationSyntax or IndexerDeclarationSyntax or VariableDeclaratorSyntax);
+            if (declaration is VariableDeclaratorSyntax variable &&
+                variable.Parent?.Parent is not FieldDeclarationSyntax and not EventFieldDeclarationSyntax)
+                return;
+
+            if (declaration is null) return;
+            var symbol = semanticModel.GetDeclaredSymbol(declaration, cancellationToken);
+            if (symbol is null) return;
+
+            var result = await SymbolFinder.FindReferencesAsync(symbol, _workspace.CurrentSolution, cancellationToken);
+            var references = result.SelectMany(item => item.Locations).ToArray();
+            cancellationToken.ThrowIfCancellationRequested();
+            if ((_editor.Text ?? string.Empty) != snapshot ||
+                _editor.TextArea.Caret.Line != caretLine || this.GetVisualRoot() is null)
+                return;
+
+            var line = _editor.Document.GetLineByOffset(declaration.SpanStart).LineNumber;
+            _referenceLensMargin?.SetReferences(line, symbol, references);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Reference lens refresh failed: {exception.Message}");
+            _referenceLensMargin?.Clear();
+        }
+    }
+
     public void CloseEditor()
     {
         _breakpointMargin?.Dispose();
         _quickActionRefresh?.Cancel();
         _quickActionRefresh?.Dispose();
         _quickActionMargin?.Dispose();
+        _referenceLensRefresh?.Cancel();
+        _referenceLensRefresh?.Dispose();
+        _referenceLensMargin?.Dispose();
         _editor.TextArea.Caret.PositionChanged -= OnCaretPositionChanged;
         _editor.TextChanged -= OnTextChanged;
         var solution = _workspace.CurrentSolution.RemoveDocument(_documentId);
@@ -215,6 +287,7 @@ public class CodeEditor : UserControl
         _workspace = workspace;
         _documentId = docId;
         Code = code;
+        _savedText = code;
 
         Content = Build();
     }
@@ -255,6 +328,13 @@ public class CodeEditor : UserControl
         {
             _quickActionMargin = new QuickActionMargin(_editor, () => _ = ShowQuickActionsAsync());
             _editor.TextArea.LeftMargins.Insert(0, _quickActionMargin);
+            _referenceLensMargin = new ReferenceLensMargin(_editor, (symbol, references) =>
+                FindReferencesRequested?.Invoke(this, new FindReferencesEventArgs
+                {
+                    Symbol = symbol,
+                    References = references.ToList()
+                }));
+            _editor.TextArea.LeftMargins.Insert(0, _referenceLensMargin);
         }
         SetupFolding();
         SetupContextMenu();
@@ -277,11 +357,13 @@ public class CodeEditor : UserControl
             SettingsData.Instance.SettingsChanged += OnSettingsChanged;
             ApplyEditorSettings();
             ScheduleQuickActionRefresh();
+            ScheduleReferenceLensRefresh();
         };
         DetachedFromVisualTree += (_, _) =>
         {
             SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
             _quickActionRefresh?.Cancel();
+            _referenceLensRefresh?.Cancel();
         };
         ApplyEditorSettings();
 
@@ -426,6 +508,95 @@ public class CodeEditor : UserControl
         }
 
         public void Dispose() => _editor.TextArea.LeftMargins.Remove(this);
+    }
+
+    private sealed class ReferenceLensMargin : Control, IDisposable
+    {
+        private readonly TextEditor _editor;
+        private readonly Action<ISymbol, IReadOnlyList<ReferenceLocation>> _onInvoked;
+        private int? _lineNumber;
+        private ISymbol? _symbol;
+        private IReadOnlyList<ReferenceLocation> _references = Array.Empty<ReferenceLocation>();
+
+        public ReferenceLensMargin(TextEditor editor, Action<ISymbol, IReadOnlyList<ReferenceLocation>> onInvoked)
+        {
+            _editor = editor;
+            _onInvoked = onInvoked;
+            Width = 24;
+            _editor.TextArea.TextView.VisualLinesChanged += OnVisualLinesChanged;
+        }
+
+        public void SetReferences(int lineNumber, ISymbol symbol, IReadOnlyList<ReferenceLocation> references)
+        {
+            _lineNumber = lineNumber;
+            _symbol = symbol;
+            _references = references;
+            ToolTip.SetTip(this, $"{references.Count} reference{(references.Count == 1 ? "" : "s")} to {symbol.Name}");
+            Cursor = new Cursor(StandardCursorType.Hand);
+            InvalidateVisual();
+        }
+
+        public void Clear()
+        {
+            _lineNumber = null;
+            _symbol = null;
+            _references = Array.Empty<ReferenceLocation>();
+            ToolTip.SetTip(this, null);
+            Cursor = null;
+            InvalidateVisual();
+        }
+
+        protected override void OnPointerPressed(PointerPressedEventArgs e)
+        {
+            base.OnPointerPressed(e);
+            if (_lineNumber is not { } targetLine || _symbol is not { } symbol ||
+                !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+                return;
+
+            var view = _editor.TextArea.TextView;
+            if (!view.VisualLinesValid) return;
+            var position = e.GetPosition(view);
+            var hitLine = view.VisualLines.FirstOrDefault(line =>
+                position.Y >= line.VisualTop - view.ScrollOffset.Y &&
+                position.Y < line.VisualTop - view.ScrollOffset.Y + line.Height);
+            if (hitLine is null || targetLine < hitLine.FirstDocumentLine.LineNumber ||
+                targetLine > hitLine.LastDocumentLine.LineNumber)
+                return;
+
+            _onInvoked(symbol, _references);
+            e.Handled = true;
+        }
+
+        public override void Render(DrawingContext context)
+        {
+            base.Render(context);
+            if (_lineNumber is not { } targetLine || ! _editor.TextArea.TextView.VisualLinesValid) return;
+
+            var view = _editor.TextArea.TextView;
+            var line = view.VisualLines.FirstOrDefault(candidate =>
+                targetLine >= candidate.FirstDocumentLine.LineNumber &&
+                targetLine <= candidate.LastDocumentLine.LineNumber);
+            if (line is null) return;
+
+            var text = new FormattedText(
+                _references.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                System.Globalization.CultureInfo.CurrentCulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                10,
+                new SolidColorBrush(Color.FromRgb(110, 190, 220)));
+            var y = line.GetTextLineVisualYPosition(line.TextLines[0], VisualYPosition.LineMiddle) -
+                    view.ScrollOffset.Y - text.Height / 2;
+            context.DrawText(text, new Point(2, y));
+        }
+
+        private void OnVisualLinesChanged(object? sender, EventArgs e) => InvalidateVisual();
+
+        public void Dispose()
+        {
+            _editor.TextArea.TextView.VisualLinesChanged -= OnVisualLinesChanged;
+            _editor.TextArea.LeftMargins.Remove(this);
+        }
     }
 
     private void ApplyEditorSettings()
@@ -647,29 +818,38 @@ public class CodeEditor : UserControl
         }
     }
 
-    private void Save()
+    private void Save() => _ = SaveAsync();
+
+    public async Task<bool> SaveAsync()
     {
         if (string.IsNullOrEmpty(FilePath))
         {
             SaveRequested?.Invoke(this, EventArgs.Empty);
-            return;
+            return false;
         }
 
         try
         {
-            File.WriteAllText(FilePath, _editor.Text);
+            var text = _editor.Text;
+            await File.WriteAllTextAsync(FilePath, text);
+            _savedText = text;
+            SaveError = null;
+            DirtyStateChanged?.Invoke(IsDirty);
             Saved?.Invoke(this, EventArgs.Empty);
             
             // Show save confirmation
             _toolTip.Content = "Saved!";
             _toolTip.IsVisible = true;
             Dispatcher.UIThread.Post(HideTooltip, DispatcherPriority.Default);
+            return true;
         }
-        catch (Exception ex)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
         {
-            _toolTip.Content = $"Save error: {ex.Message}";
+            SaveError = exception.Message;
+            _toolTip.Content = $"Save error: {exception.Message}";
             _toolTip.IsVisible = true;
             Dispatcher.UIThread.Post(HideTooltip, DispatcherPriority.Default);
+            return false;
         }
     }
     

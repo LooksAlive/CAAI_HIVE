@@ -6,6 +6,7 @@ namespace CAAI;
 public partial class MainMenuWidget : UserControl
 {
     public event Action? OnNewNotebook;
+    public event Action? OnNewCodeAnalysis;
     public event Action? OnNewProject;
     public event Action? OnOpenFile;
     public event Action? OnOpenProject;
@@ -95,6 +96,7 @@ public partial class MainMenuWidget : UserControl
         
         // === File Subscriptions ===
         MenuNewNotebook.Click += (s, e) => OnNewNotebook?.Invoke();
+        MenuNewCodeAnalysis.Click += (s, e) => OnNewCodeAnalysis?.Invoke();
         MenuNewProject.Click  += (s, e) => OnNewProject?.Invoke();
         MenuOpenFile.Click    += (s, e) => OnOpenFile?.Invoke();
         MenuOpenProject.Click += (s, e) => OnOpenProject?.Invoke();

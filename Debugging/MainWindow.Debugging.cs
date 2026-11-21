@@ -65,13 +65,48 @@ public partial class MainWindow
             _debugClosePending = true;
             Dispatcher.UIThread.Post(async () =>
             {
-                try { await _debugSession.DisposeAsync(); }
-                catch (Exception exception) { _terminal.AppendOutput(exception.Message + Environment.NewLine, OutputType.Error); }
+                var allowClose = true;
+                try
+                {
+                    foreach (var preview in _tabs.Items.OfType<TabItem>()
+                                 .Select(tab => tab.Content)
+                                 .OfType<FilePreviewControl>()
+                                 .Where(preview => preview.IsDirty))
+                    {
+                        if (await ConfirmClosePreviewAsync(preview)) continue;
+                        allowClose = false;
+                        break;
+                    }
+
+                    if (allowClose)
+                    {
+                        foreach (var editor in OpenCodeEditors().Where(editor => editor.IsDirty))
+                        {
+                            if (await ConfirmCloseEditorAsync(editor)) continue;
+                            allowClose = false;
+                            break;
+                        }
+                    }
+
+                    if (allowClose)
+                        await _debugSession.DisposeAsync();
+                }
+                catch (Exception exception)
+                {
+                    _terminal.AppendOutput(exception.Message + Environment.NewLine, OutputType.Error);
+                }
                 finally
                 {
-                    _runner.Stop();
-                    _debugCloseComplete = true;
-                    Close();
+                    if (allowClose)
+                    {
+                        _runner.Stop();
+                        _debugCloseComplete = true;
+                        Close();
+                    }
+                    else
+                    {
+                        _debugClosePending = false;
+                    }
                 }
             });
         };

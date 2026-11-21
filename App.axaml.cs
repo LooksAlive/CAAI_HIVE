@@ -291,6 +291,8 @@ public partial class MainWindow : Window
         var openEditors = OpenCodeEditors().ToArray();
         if (openEditors.Any(editor => !File.Exists(editor.FilePath) || File.ReadAllText(editor.FilePath) != editor.GetText()))
             throw new InvalidOperationException("Save or close modified editor tabs before opening another project.");
+        if (_tabs.Items.OfType<TabItem>().Select(tab => tab.Content).OfType<FilePreviewControl>().Any(preview => preview.IsDirty))
+            throw new InvalidOperationException("Save or close modified preview tabs before opening another project.");
 
         var files = GetProjectSourceFiles(folderPath);
         var sources = new List<(string Path, string Content)>(files.Length);
@@ -1259,6 +1261,7 @@ public partial class MainWindow : Window
         // === File Menu ===
         _menu.SetRecentProjects(SettingsData.Instance.GetRecentProjectPaths().Where(Directory.Exists));
         _menu.OnNewNotebook += AddNotebookTab;
+        _menu.OnNewCodeAnalysis += AddCodeAnalysisTab;
         _menu.OnNewProject += () => { /* TODO: Implement new project */ };
         _menu.OnOpenFile += async () =>
         {
@@ -1333,29 +1336,18 @@ public partial class MainWindow : Window
                     await notebook.SaveNotebookAsync();
                     return;
                 }
+                if (tab.Content is FilePreviewControl preview)
+                {
+                    await SavePreviewFileAsync(preview);
+                    return;
+                }
                 var editor = FindEditorInContent(tab.Content);
                 if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
                 {
-                    try
-                    {
-                        File.WriteAllText(editor.FilePath, editor._editor.Text);
-                    }
-                    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
-                    {
-                        ShowNotification("Save failed", exception.Message, NotificationType.Error);
-                        return;
-                    }
-                    var toast = new Notification(
-                    title: "Info",
-                    message: $"[Saved] {Path.GetFileName(editor.FilePath)}",
-                    type: NotificationType.Information,
-                    expiration: TimeSpan.FromSeconds(5),
-                    onClick: () => Console.WriteLine("User clicked the notification!"),
-                    onClose: () => Console.WriteLine("Notification dismissed.")
-                );
-
-                    // Send to the manager screen container
-                    _notificationManager.Show(toast);
+                    if (await editor.SaveAsync())
+                        ShowNotification("Saved", Path.GetFileName(editor.FilePath), NotificationType.Success);
+                    else
+                        ShowNotification("Save failed", editor.SaveError ?? $"Could not save {editor.FilePath}", NotificationType.Error);
                 }
             }
         };
@@ -1376,9 +1368,19 @@ public partial class MainWindow : Window
                         continue;
                     }
 
+                    if (tab.Content is FilePreviewControl preview)
+                    {
+                        if (!await SavePreviewFileAsync(preview))
+                            allSaved = false;
+                        continue;
+                    }
+
                     var editor = FindEditorInContent(tab.Content);
                     if (editor != null && !string.IsNullOrEmpty(editor.FilePath))
-                        File.WriteAllText(editor.FilePath, editor._editor.Text);
+                    {
+                        if (!await editor.SaveAsync())
+                            allSaved = false;
+                    }
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
@@ -1588,6 +1590,84 @@ public partial class MainWindow : Window
     private void ShowNotification(string title, string message, NotificationType type) =>
         _notificationManager.Show(new Notification(title, message, type, expiration: TimeSpan.FromSeconds(5)));
 
+    private async Task<bool> SavePreviewFileAsync(FilePreviewControl preview)
+    {
+        if (await preview.SaveAsync())
+        {
+            ShowNotification("Saved", Path.GetFileName(preview.FilePath), NotificationType.Success);
+            return true;
+        }
+
+        ShowNotification("Save failed", preview.SaveError ?? $"Could not save {preview.FilePath}", NotificationType.Error);
+        return false;
+    }
+
+    private Task<bool> ConfirmClosePreviewAsync(FilePreviewControl preview) =>
+        ConfirmCloseUnsavedFileAsync(preview.FilePath, preview.IsDirty, () => SavePreviewFileAsync(preview));
+
+    private Task<bool> ConfirmCloseEditorAsync(CodeEditor editor) =>
+        ConfirmCloseUnsavedFileAsync(editor.FilePath, editor.IsDirty, async () =>
+        {
+            if (await editor.SaveAsync())
+            {
+                ShowNotification("Saved", Path.GetFileName(editor.FilePath), NotificationType.Success);
+                return true;
+            }
+
+            ShowNotification("Save failed", editor.SaveError ?? $"Could not save {editor.FilePath}", NotificationType.Error);
+            return false;
+        });
+
+    private async Task<bool> ConfirmCloseUnsavedFileAsync(string filePath, bool isDirty, Func<Task<bool>> saveAsync)
+    {
+        if (!isDirty) return true;
+
+        var dialog = new Window
+        {
+            Title = "Unsaved changes",
+            Width = 420,
+            Height = 150,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = new SolidColorBrush(Color.FromRgb(35, 35, 40))
+        };
+        var panel = new StackPanel { Margin = new Thickness(18), Spacing = 14 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Save changes to {Path.GetFileName(filePath)} before closing?",
+            Foreground = Brushes.White,
+            TextWrapping = TextWrapping.Wrap
+        });
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Spacing = 8
+        };
+        var save = new Button { Content = "Save" };
+        var discard = new Button { Content = "Discard" };
+        var cancel = new Button { Content = "Cancel" };
+        save.Click += (_, _) => dialog.Close(1);
+        discard.Click += (_, _) => dialog.Close(2);
+        cancel.Click += (_, _) => dialog.Close(0);
+        buttons.Children.Add(save);
+        buttons.Children.Add(discard);
+        buttons.Children.Add(cancel);
+        panel.Children.Add(buttons);
+        dialog.Content = panel;
+
+        var result = await dialog.ShowDialog<int>(this);
+        if (result == 1)
+            return await saveAsync();
+        if (result == 2)
+        {
+            ShowNotification("Changes discarded", Path.GetFileName(filePath), NotificationType.Warning);
+            return true;
+        }
+
+        ShowNotification("File kept open", $"Unsaved changes remain in {Path.GetFileName(filePath)}.", NotificationType.Warning);
+        return false;
+    }
+
     private async Task ShowSettings()
     {
         var dialog = new SettingsDialog(SettingsData.Instance, App.SettingsPath);
@@ -1706,11 +1786,6 @@ public partial class MainWindow : Window
         _filesTreeView.OnFileOpened += (path) =>
         {
             currentSyntaxTree = OpenFile(path);
-            if (currentSyntaxTree != null)
-            {
-                //_structureTree._treeView.ItemsSource = currentSyntaxTree;
-                _structureTree.SetStructure(currentSyntaxTree, path);
-            }
         };
 
         _filesTreeView.OnFileDeleted += (path) =>
@@ -1847,6 +1922,39 @@ public partial class MainWindow : Window
 
         _tabs.Items.Add(tab);
         _tabs.SelectedItem = tab; // Switch to the new notebook
+    }
+
+    private void AddCodeAnalysisTab()
+    {
+        var analysis = new CodeAnalysisWidget(_workspace);
+        var tab = new TabItem();
+        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        header.Children.Add(new TextBlock
+        {
+            Text = "Code Analysis",
+            Foreground = Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var closeButton = new Button
+        {
+            Content = "×",
+            Padding = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = Brushes.White,
+            BorderThickness = new Thickness(0),
+            FontWeight = FontWeight.Bold
+        };
+        closeButton.Click += (_, e) =>
+        {
+            e.Handled = true;
+            _tabs.Items.Remove(tab);
+            analysis.Dispose();
+        };
+        header.Children.Add(closeButton);
+        tab.Header = header;
+        tab.Content = analysis;
+        _tabs.Items.Add(tab);
+        _tabs.SelectedItem = tab;
     }
 
     private void SetupClassHierarchy()
@@ -2067,17 +2175,31 @@ public partial class MainWindow : Window
         try
         {
             path = Path.GetFullPath(path);
-            foreach (var existingTab in _tabs.Items.OfType<TabItem>())
+            var existingTab = _tabs.Items.OfType<TabItem>().FirstOrDefault(tab =>
+                string.Equals(tab.Tag as string, path, StringComparison.OrdinalIgnoreCase) ||
+                (FindEditorInContent(tab.Content) is { } editor &&
+                 string.Equals(editor.FilePath, path, StringComparison.OrdinalIgnoreCase)));
+            if (existingTab != null)
             {
-                if (FindEditorInContent(existingTab.Content) is { } existingEditor &&
-                    string.Equals(existingEditor.FilePath, path, StringComparison.OrdinalIgnoreCase))
-                {
-                    _tabs.SelectedItem = existingTab;
-                    return CSharpSyntaxTree.ParseText(existingEditor.GetText(), path: path);
-                }
+                _tabs.SelectedItem = existingTab;
+                var existingTree = FindEditorInContent(existingTab.Content) is { } existingEditor
+                    ? CSharpSyntaxTree.ParseText(existingEditor.GetText(), path: path)
+                    : null;
+                UpdateStructureForFile(existingTree, path);
+                return existingTree;
             }
             if (!File.Exists(path)) return null;
-            return OpenExistingFile(path, File.ReadAllText(path));
+
+            if (!IsCodeEditorFile(path))
+            {
+                OpenPreviewTab(path);
+                UpdateStructureForFile(null, path);
+                return null;
+            }
+
+            var syntaxTree = OpenExistingFile(path, File.ReadAllText(path));
+            UpdateStructureForFile(syntaxTree, path);
+            return syntaxTree;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
@@ -2086,12 +2208,72 @@ public partial class MainWindow : Window
         }
     }
 
+    private void UpdateStructureForFile(SyntaxTree? syntaxTree, string filePath)
+    {
+        currentSyntaxTree = syntaxTree;
+        _structureTree.SetStructure(syntaxTree ?? CSharpSyntaxTree.ParseText(string.Empty), filePath);
+    }
+
+    private static bool IsCSharpSourceFile(string path) =>
+        Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(path).Equals(".csx", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCodeEditorFile(string path) =>
+        IsCSharpSourceFile(path) ||
+        (Path.GetFileName(path).Equals("launch.json", StringComparison.OrdinalIgnoreCase) &&
+         path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+             .Any(segment => segment.Equals(".caai", StringComparison.OrdinalIgnoreCase)));
+
+    private void OpenPreviewTab(string path)
+    {
+        var preview = new FilePreviewControl(path);
+        var tab = new TabItem
+        {
+            Header = Path.GetFileName(path),
+            Content = preview,
+            Tag = Path.GetFullPath(path)
+        };
+        var closeButton = new Button
+        {
+            Content = "×",
+            Padding = new Thickness(0),
+            Background = Brushes.Transparent,
+            Foreground = Brushes.White,
+            BorderThickness = new Thickness(0),
+            FontWeight = FontWeight.Bold
+        };
+        closeButton.Click += async (_, e) =>
+        {
+            e.Handled = true;
+            if (!await ConfirmClosePreviewAsync(preview)) return;
+            _tabs.Items.Remove(tab);
+            Dispatcher.UIThread.Post(preview.Dispose, DispatcherPriority.Background);
+        };
+        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        var title = new TextBlock
+        {
+            Text = Path.GetFileName(path),
+            Foreground = Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        preview.DirtyStateChanged += isDirty => title.Text = isDirty
+            ? $"{Path.GetFileName(path)} *"
+            : Path.GetFileName(path);
+        preview.SaveRequested += async (_, _) => await SavePreviewFileAsync(preview);
+        header.Children.Add(title);
+        header.Children.Add(closeButton);
+        tab.Header = header;
+        _tabs.Items.Add(tab);
+        _tabs.SelectedItem = tab;
+    }
+
     private SyntaxTree? OpenExistingFile(string path, string src)
     {
-        if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        SyntaxTree? syntaxTree = null;
+        if (IsCSharpSourceFile(path))
         {
-            var tree = CSharpSyntaxTree.ParseText(src, path: path);
-            currentSyntaxTree = tree;
+            syntaxTree = CSharpSyntaxTree.ParseText(src, path: path);
+            currentSyntaxTree = syntaxTree;
         }
 
         var docId = RegisterFileInWorkspace(path, src);
@@ -2118,6 +2300,8 @@ public partial class MainWindow : Window
             Foreground = Brushes.White,
             VerticalAlignment = VerticalAlignment.Center
         };
+        var editorFileName = Path.GetFileName(path);
+        editor.DirtyStateChanged += isDirty => headerText.Text = isDirty ? $"{editorFileName} *" : editorFileName;
 
         var closeButton = new Button
         {
@@ -2131,16 +2315,29 @@ public partial class MainWindow : Window
             FontWeight = FontWeight.Bold
         };
 
-        closeButton.Click += (_, _) =>
+        closeButton.Click += (_, e) =>
         {
-            editor.CloseEditor();
-            _tabs.Items.Remove(tab);
+            e.Handled = true;
+            Dispatcher.UIThread.Post(async () =>
+            {
+                if (!await ConfirmCloseEditorAsync(editor)) return;
+                _tabs.Items.Remove(tab);
+                try
+                {
+                    editor.CloseEditor();
+                }
+                catch (Exception exception)
+                {
+                    ShowNotification("Could not fully close editor", exception.Message, NotificationType.Warning);
+                }
+            });
         };
 
         headerPanel.Children.Add(headerText);
         headerPanel.Children.Add(closeButton);
 
         tab.Header = headerPanel;
+        tab.Tag = Path.GetFullPath(path);
 
         // Wrap editor in Grid to ensure styles propagate
         var container = new Grid
@@ -2157,7 +2354,7 @@ public partial class MainWindow : Window
 
         _ = RefreshDiagnosticsAsync(docId);
         //return structureNodes;
-        return currentSyntaxTree;
+        return syntaxTree;
     }
 
     private void OnGoToDefinitionRequested(object? sender, GoToDefinitionEventArgs e)

@@ -7,6 +7,7 @@
             
             <MenuItem Header="_File" Foreground="White">
                 <MenuItem Header="New _Notebook" InputGesture="Ctrl+Shift+N" Name="MenuNewNotebook" Foreground="White"/>
+                <MenuItem Header="New Code _Analysis" Name="MenuNewCodeAnalysis" Foreground="White"/>
                 <MenuItem Header="_New Project" InputGesture="Ctrl+N" Name="MenuNewProject" Foreground="White"/>
                 <Separator/>
                 <MenuItem Header="_Open File..." InputGesture="Ctrl+O" Name="MenuOpenFile" Foreground="White"/>
