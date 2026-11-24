@@ -228,6 +228,10 @@ public partial class MainWindow : Window
     private int _hierarchyRefreshVersion;
     private string? _selectedHierarchyTypeName;
     private EnvironmentWidget _env = null!;
+    private readonly EnvironmentStore _environmentStore = new();
+    private ConnectionsWidget _connectionsWidget = null!;
+    private Action<string>? _activateSideView;
+    public EnvironmentStore EntityStore => _environmentStore;
     private AstViewer _astViewer = new();
     private DotnetRunner _runner;
     private readonly WindowNotificationManager _notificationManager = new WindowNotificationManager()
@@ -742,6 +746,7 @@ public partial class MainWindow : Window
             ("Hierarchy", Symbol.Library, _hierarchyTree),
             ("Inspector", Symbol.Find, _inspector),
             ("Environment", Symbol.Setting, _env),
+            ("Connections", Symbol.Link, _connectionsWidget),
             ("AST", Symbol.Document, _astViewer)
         };
         var selectedView = views.First(view => view.Name == _activeSideView);
@@ -780,6 +785,7 @@ public partial class MainWindow : Window
             }
         });
         var group = Guid.NewGuid().ToString();
+        var viewButtons = new Dictionary<string, RadioButton>();
         foreach (var view in views)
         {
             var button = new RadioButton
@@ -820,7 +826,9 @@ public partial class MainWindow : Window
                 if (view.Name == "Git") _gitWidget.Refresh();
             };
             tools.Children.Add(button);
+            viewButtons.Add(view.Name, button);
         }
+        _activateSideView = name => { if (viewButtons.TryGetValue(name, out var button)) button.IsChecked = true; };
         var rail = new ScrollViewer
         {
             Width = 44,
@@ -1090,7 +1098,7 @@ public partial class MainWindow : Window
         var previous = (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
             _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode,
             _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
-            _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab, _gitWidget);
+            _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab, _gitWidget, _connectionsWidget, _activateSideView);
         var restoreControls = new Stack<Action>();
         var outputVisible = _outputDock?.IsVisible ?? true;
         var outputHeight = _mainGrid?.RowDefinitions[2].Height ?? _outputHeight;
@@ -1128,7 +1136,7 @@ public partial class MainWindow : Window
             (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
                 _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode,
                 _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
-                _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab, _gitWidget) = previous;
+                _outputSplitter, _nuGetTab, _hierarchyTree, _env, _debugTab, _gitWidget, _connectionsWidget, _activateSideView) = previous;
             while (restoreControls.TryPop(out var restore))
                 restore();
             throw;
@@ -1225,7 +1233,18 @@ public partial class MainWindow : Window
 
     private void SetupEnvironment()
     {
-        _env = new EnvironmentWidget(_workspace);
+        _env = new EnvironmentWidget(_workspace, _environmentStore);
+        _connectionsWidget = new ConnectionsWidget(_environmentStore);
+        _env.ConnectionRequested += async (_, entity) =>
+        {
+            _activateSideView?.Invoke("Connections");
+            await _connectionsWidget.CreateConnectionAsync(entity);
+        };
+        _connectionsWidget.RevealEntityRequested += (_, entity) =>
+        {
+            _activateSideView?.Invoke("Environment");
+            _env.RevealEntity(entity);
+        };
     }
 
     private void SetupAstViewer()
@@ -1935,6 +1954,7 @@ public partial class MainWindow : Window
     private void AddCodeAnalysisTab()
     {
         var analysis = new CodeAnalysisWidget(_workspace);
+        analysis.SourceRequested += (path, line, column) => OpenFileAtLine(path, line - 1, column - 1);
         var tab = new TabItem();
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
         header.Children.Add(new TextBlock

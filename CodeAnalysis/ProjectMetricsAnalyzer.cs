@@ -45,7 +45,10 @@ public sealed record ProjectMetrics(
     int TotalComplexity,
     IReadOnlyList<TypeMetric> Types,
     IReadOnlyList<NamingIssue> NamingIssues,
-    IReadOnlyList<DuplicateCodeGroup> SimilarCode);
+    IReadOnlyList<DuplicateCodeGroup> SimilarCode)
+{
+    public ProjectSimilarityReport Similarities { get; init; } = ProjectSimilarityReport.Empty;
+}
 
 public static class ProjectMetricsAnalyzer
 {
@@ -187,7 +190,10 @@ public static class ProjectMetricsAnalyzer
             types.Sum(type => type.Complexity),
             sortedTypes,
             namingIssues.OrderBy(issue => issue.Kind, StringComparer.Ordinal).ThenBy(issue => issue.Name, StringComparer.OrdinalIgnoreCase).ToArray(),
-            duplicateGroups);
+            duplicateGroups)
+        {
+            Similarities = ProjectSimilarityAnalyzer.Analyze(compilation, cancellationToken: cancellationToken)
+        };
     }
 
     private static bool IsSourceMethod(IMethodSymbol method) => !method.IsImplicitlyDeclared && method.MethodKind is

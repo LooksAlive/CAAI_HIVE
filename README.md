@@ -1,5 +1,41 @@
 # CAAI_HIVE
 
+## Statistics And Similarity
+
+Open **File > New Code Analysis**, then **Similarity**. The existing project counts, complexity estimates, naming-convention suggestions and exact normalized method-structure groups are retained. The Similarity tab now adds scored symbol pairs, category/symbol-kind filters, a 65-100% threshold, name/file filtering, shared evidence and source-navigation buttons.
+
+| Category | Comparison |
+| --- | --- |
+| Type names | Names within the same type kind, including classes, structs, interfaces and records |
+| Member names | Fields with fields, properties with properties, methods with methods, and events with events |
+| Member types | Resolved field/property/event data types and method return/parameter signatures |
+| Type structure | Declared member-kind/signature counts, static/instance shape, property accessors, base types and interfaces, ignoring member names |
+| Code usage | Resolved calls, member accesses, and shared callers/consumers; overloads and containing types remain distinct |
+
+Name scores use the better of normalized edit similarity and identifier-word overlap, ignoring case and separators but retaining Unicode letters. Type, structure and usage scores use weighted Jaccard overlap of counted features. Empty feature sets do not produce matches. A 100% score means identical evidence for that category, not equivalent behavior or interchangeable APIs. Member accessibility, complete control/data flow, runtime frequency, reflection and dynamic dispatch are not fully modeled. Existing method fingerprints normalize identifiers and literals; they are syntactic matches, not a proof of semantic equivalence.
+
+`ProjectMetrics.Similarities` exposes the report alongside the existing statistics. `ProjectSimilarityAnalyzer.Analyze(compilation, options, cancellationToken)` can be used independently. Default bounds are 1,500 captured symbols, 150,000 comparable pairs, and the 100 highest-scoring matches per category, with a 65% analysis floor. The UI defaults to 75%. Warnings identify truncated analysis; results are candidates, not an exhaustive global ranking once symbol/pair limits are reached. Analysis uses the widget's current first Roslyn project, not all projects in a solution. Similarity results do not automatically create manual Connections.
+
+## Connections
+
+The **Connections** link icon in the left toolbar manages named relationships between two or more Environment entities. Add classes, fields, methods or data using Environment, then choose **Connect to...** on an entity or create a connection with the **+** button in Connections. Select participants, give the connection a name and relation (for example `Consumes` or `Maps`), and optionally add notes. Participant selections survive filtering. Existing connections can be filtered, edited, deleted, and their participants revealed in Environment.
+
+Environment's **Expose data members** command makes up to 100 direct members selectable as child entities. It supports JSON properties/array items and the inspector's bounded field/list/dictionary representation. Property getters are not executed: such properties have metadata but no captured value, so nested property values are unavailable until supplied explicitly. Repeating the command does not duplicate children. Exposing deeper members is explicit.
+
+`EnvironmentStore` owns both `Entities` and read-only `Connections`. `EnvironmentWidget` and `ConnectionsWidget` use the same store and the same `EnvironmentEntity` instances, identified by `Id`; `MainWindow.EntityStore` exposes the window's store. For programmatic use:
+
+```csharp
+var store = new EnvironmentStore();
+var source = new EnvironmentEntity { Name = "tokens", Type = EntityType.DataValue, Value = tokens };
+var target = new EnvironmentEntity { Name = "Parse", Type = EntityType.CodeSymbol, RoslynSymbol = parserMethod };
+store.Entities.Add(source);
+store.Entities.Add(target);
+var connection = store.Connect("Parser input", [source, target], "Consumes");
+var related = store.GetConnections(source);
+```
+
+Connections are manually asserted, non-directional participant groups; their relation text does not execute code or imply an automatically proven dependency. Removing any participant removes its affected connections. Replacing expanded raw data invalidates its captured child members and their connections. UI rebuilds preserve the shared store. This initial version is **in-memory for the current window session**: restart persistence, import/export of connections, automatic source-symbol rebinding after edits, graph visualization and automatic links from `CodeAnalysis` are not implemented. Store mutation should occur on the UI thread when views are attached.
+
 ## Refactoring
 
 Use **F2**, **Rename Symbol...** in the editor context menu, or the rename entry under **Ctrl+.**. Rename follows source symbol references across workspace documents, validates the identifier and rejects new compiler errors/conflicts. It leaves file names, strings, comments and unrelated overloads unchanged. Open tabs synchronize with workspace changes; affected unopened project files are surfaced as unsaved tabs. Review and use **Save All** to persist the changes. Undo is per editor, not a single workspace-wide transaction.

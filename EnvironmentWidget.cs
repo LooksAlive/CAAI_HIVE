@@ -28,6 +28,7 @@ public enum EntityType
 
 public class EnvironmentEntity : INotifyPropertyChanged
 {
+    public Guid Id { get; } = Guid.NewGuid();
     private string _name = "";
     private EntityType _type;
     private object? _value;
@@ -89,7 +90,8 @@ public class EnvironmentEntity : INotifyPropertyChanged
 public class EnvironmentWidget : UserControl
 {
     private readonly AdhocWorkspace _workspace;
-    private readonly ObservableCollection<EnvironmentEntity> _entities = new();
+    private readonly ObservableCollection<EnvironmentEntity> _entities;
+    public EnvironmentStore Store { get; }
     private TreeView _entityTree = null!;
     private TextBox _searchBox = null!;
     private ComboBox _typeFilter = null!;
@@ -100,17 +102,24 @@ public class EnvironmentWidget : UserControl
 
     public event EventHandler<EnvironmentEntity>? EntitySelected;
     public event EventHandler<EnvironmentEntity>? EntityDoubleClicked;
+    public event EventHandler<EnvironmentEntity>? ConnectionRequested;
 
-    public EnvironmentWidget(AdhocWorkspace workspace)
+    public EnvironmentWidget(AdhocWorkspace workspace, EnvironmentStore? store = null)
     {
         _workspace = workspace;
+        Store = store ?? new EnvironmentStore();
+        _entities = Store.Entities;
         BuildUI();
-        _entities.CollectionChanged += (_, _) => ApplyFilter();
+        AttachedToVisualTree += (_, _) => { Store.Changed += OnStoreChanged; ApplyFilter(); };
+        DetachedFromVisualTree += (_, _) => Store.Changed -= OnStoreChanged;
         SetupKeyboardHandling();
         BuildContextMenu();
         _entityTree.ContextMenu = _contextMenu;
-        AddDefaultEntities();
+        if (_entities.Count == 0) AddDefaultEntities();
+        ApplyFilter();
     }
+
+    private void OnStoreChanged(object? sender, EventArgs args) => ApplyFilter();
 
     #region UI Construction
 
@@ -454,6 +463,32 @@ public class EnvironmentWidget : UserControl
         _contextMenu.Items.Add(removeMenu);
         _contextMenu.Items.Add(ioMenu);
         _contextMenu.Items.Add(viewMenu);
+        var connect = new MenuItem { Name = "ConnectEnvironmentEntity", Header = "Connect to..." };
+        connect.Click += (_, _) =>
+        {
+            if (_entityTree.SelectedItem is EnvironmentEntity entity) ConnectionRequested?.Invoke(this, entity);
+        };
+        var members = new MenuItem { Name = "ExposeDataMembers", Header = "Expose data members" };
+        members.Click += (_, _) =>
+        {
+            if (_entityTree.SelectedItem is not EnvironmentEntity entity) return;
+            try
+            {
+                Store.AddDataMembers(entity);
+                RevealEntity(entity);
+                entity.IsExpanded = true;
+                UpdateStatus("Exposed up to 100 members; property getters were not evaluated");
+            }
+            catch (Exception exception) { UpdateStatus(exception.Message, true); }
+        };
+        _contextMenu.Opened += (_, _) =>
+        {
+            connect.IsEnabled = _entityTree.SelectedItem is EnvironmentEntity;
+            members.IsEnabled = _entityTree.SelectedItem is EnvironmentEntity { Type: EntityType.DataValue, Value: not null };
+        };
+        _contextMenu.Items.Add(new Separator());
+        _contextMenu.Items.Add(connect);
+        _contextMenu.Items.Add(members);
         _contextMenu.Items.Add(new Separator());
         _contextMenu.Items.Add(CreateMenuItem("📋 Copy Name", (_, _) => CopySelectedName()));
         _contextMenu.Items.Add(CreateMenuItem("📋 Copy Value", (_, _) => CopySelectedValue()));
@@ -1011,10 +1046,17 @@ public class EnvironmentWidget : UserControl
         UpdateStatus($"Added symbol: {symbol.Name}");
     }
 
-    private void RevealEntity(EnvironmentEntity entity)
+    public void RevealEntity(EnvironmentEntity entity)
     {
         _searchBox.Text = "";
         _typeFilter.SelectedIndex = 0;
+        var seen = new HashSet<EnvironmentEntity>();
+        var child = entity;
+        while (seen.Add(child) && Store.GetAllEntities().FirstOrDefault(candidate => candidate.Children.Contains(child)) is { } parent)
+        {
+            parent.IsExpanded = true;
+            child = parent;
+        }
         ApplyFilter();
         _entityTree.SelectedItem = entity;
     }
@@ -1079,7 +1121,7 @@ public class EnvironmentWidget : UserControl
         var selected = _entityTree.SelectedItem as EnvironmentEntity;
         if (selected != null)
         {
-            _entities.Remove(selected);
+            Store.RemoveEntity(selected);
             UpdateStatus($"Removed: {selected.Name}");
         }
     }
@@ -1331,7 +1373,7 @@ public class EnvironmentWidget : UserControl
 
     public void RemoveEntity(EnvironmentEntity entity)
     {
-        _entities.Remove(entity);
+        Store.RemoveEntity(entity);
         UpdateStatus($"Removed: {entity.Name}");
     }
 
