@@ -1,5 +1,67 @@
 # CAAI_HIVE
 
+## Editor Linting And Fixes
+
+Live document and notebook diagnostics now combine compiler diagnostics with available bundled Roslyn IDE analyzers, project analyzer references, and CAAI's in-process rules. Suggestions appear as blue underlines and information entries; warnings remain orange and errors red. Use the existing light bulb or **Ctrl+.** on the diagnostic's line to see available fixes alongside formatting and explicit-type actions. Not every diagnostic has a fix.
+
+| Rule | Default | Action |
+| --- | --- | --- |
+| `CAAI1001` Redundant boolean comparison | Suggestion | Simplify comparison without changing nullable or user-conversion semantics |
+| `CAAI1002` Rethrowing the caught exception | Warning | Replace `throw ex;` with `throw;` when the caught variable has not been reassigned |
+| `CAAI1003` Empty catch block | Warning | Review manually; no potentially unsafe automatic rewrite |
+
+Folder loading imports applicable `.editorconfig` files, including ancestor and nested configurations. For example:
+
+```ini
+root = true
+
+[*.cs]
+dotnet_diagnostic.CAAI1001.severity = suggestion
+dotnet_diagnostic.CAAI1002.severity = warning
+dotnet_diagnostic.CAAI1003.severity = warning
+dotnet_diagnostic.IDE0004.severity = suggestion
+```
+
+Reopen the project folder after changing configuration files. Rules left at hidden severity do not appear in the diagnostics list. Notebook scratch projects use default rules unless their workspace is explicitly configured.
+
+`EditorAnalysisService.GetDiagnosticsAsync(document, cancellationToken)` exposes the same document-level analysis programmatically. `EditorAnalysisService.Register(analyzer, codeFixProvider)` adds trusted custom or third-party analyzers and optional fixes. Analyzers attached through `Project.AnalyzerReferences` are also executed; register their code-fix providers separately if needed. Providers and analyzers that fail report details to debug output rather than preventing other providers from running. Bundled provider discovery is best-effort: providers requiring unavailable host services are skipped.
+
+The editor uses an `AdhocWorkspace`, not an MSBuild project loader. Adding `AnalysisLevel` or analyzer NuGet references to a project file alone does **not** load all SDK `CAxxxx`, Roslynator, Sonar or StyleCop rules into this editor. Those require explicitly attaching/registering the corresponding runtime analyzers and fixes. No third-party analyzer packs are installed automatically. Only current-document text fixes are applied; fixes changing other files or project configuration are rejected visibly rather than partially applied. Fix-all and solution-wide refactoring are not exposed.
+
+## Input-To-Code Analysis
+
+`CAAI.CodeAnalysis` connects runtime input objects (including token lists) to potential dependencies in a Roslyn compilation. This is a callable analysis API, not an inspector UI command or execution tracer.
+
+```csharp
+var analyzer = new CAAI.CodeAnalysis(compilation);
+var result = analyzer.Analyze(tokens, "tokens", parserParameter);
+
+// Alternative entry points for existing local values:
+var fromInspector = analyzer.AnalyzeInspector(selectedObjectNode, parserParameter);
+var fromEnvironment = analyzer.AnalyzeEnvironment(selectedDataEntity, parserParameter);
+
+foreach (var connection in result.Connections)
+{
+	var part = result.Parts[connection.InputPartId];
+	Console.WriteLine($"{part.Path} -> {connection.Kind}: " +
+		$"{connection.FilePath}:{connection.Line}:{connection.Column}");
+}
+
+var next = analyzer.Analyze(nextTokens, "tokens", parserParameter);
+var counts = result.GetFeatureCounts();
+var similarity = result.SimilarityTo(next);
+```
+
+`parserParameter` is the `IParameterSymbol` for the parser's input parameter in the supplied compilation. Omit it to infer candidate entry parameters by runtime type, including implemented collection interfaces. Explicit binding avoids treating unrelated methods with the same input type as entry points. Inspector inputs must have an evaluated, non-null `RawValue`; remote debugger display-only snapshots cannot be analyzed by reflection.
+
+Reflection records paths, types, and bounded scalar previews. Public fields and enumerable items are traversed; properties are represented without invoking getters by default. Set `new InputAnalysisOptions { EvaluateProperties = true }` to traverse property values too. Getters and enumeration execute user code, can mutate input, and cannot be forcibly interrupted if they block. Cancellation is checked between operations. Node, depth, collection-item and flow-pass limits bound analysis work; warnings report skipped or truncated data and evaluation failures.
+
+Roslyn flow follows parameter/local aliases, public member reads, collection indexing, `foreach` items, assignments, source call arguments and return values. Connections include member/reference reads, calls, returns and conditions (`if`, conditional expressions, loops and switch inputs), with one-based source lines and columns. Constant integer indices select individual captured items; unknown indices conservatively select all captured items.
+
+Connections are **potential dependencies, not observed execution**. Flow merges assignments and call sites and does not evaluate conditions against token values. External method results conservatively inherit argument dependencies; arbitrary heap mutations, dynamic/reflection calls, delegate dispatch, complete LINQ semantics and runtime branch outcomes are not modeled. `FlowConverged` and `Warnings` must be checked before interpreting results.
+
+Feature counts measure the number of input parts connected to each source location/kind/symbol. `SimilarityTo` computes weighted Jaccard similarity over those counts (0 to 1; no connections scores 0). Compare against the same source revision: offsets are not stable across code edits. This compares dependency structure and multiplicity, not token text equality or measured branch coverage. Result records can be serialized with `System.Text.Json` for later statistics; scalar previews may contain sensitive input.
+
 ## Git
 
 The Git icon in the left toolbar opens source control for the current project folder. Git must be installed and available on `PATH`. Use the panel to initialize a repository, inspect staged and working-tree changes and diffs, stage or unstage files, commit, create or switch local branches, delete merged local branches, inspect the latest 100 commits across refs, and fetch, pull, or push. Select a commit and use the document button or double-click to view its details and diff. Pulls are fast-forward only. Remote URLs, upstream branches, credentials, and commit identity must be configured in Git; terminal credential prompts are disabled. The footer shows the branch, change counts, and ahead/behind counts when an upstream is configured.

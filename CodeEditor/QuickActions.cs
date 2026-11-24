@@ -12,6 +12,7 @@ internal static class QuickActions
         Document document, int caretOffset, CancellationToken cancellationToken, bool includeDocumentActions = true)
     {
         var actions = new List<CodeAction>();
+        actions.AddRange(await Task.Run(() => EditorAnalysisService.GetFixesAsync(document, caretOffset, cancellationToken), cancellationToken));
         if (includeDocumentActions)
         {
             var text = await document.GetTextAsync(cancellationToken);

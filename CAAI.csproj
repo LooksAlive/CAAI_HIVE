@@ -45,4 +45,9 @@
       <PackageReference Include="Semi.Avalonia.AvaloniaEdit" Version="11.2.0.2" />
     </ItemGroup>
 
+    <Target Name="EnsureAvaloniaXamlCompiled"
+            AfterTargets="CoreCompile"
+            DependsOnTargets="CompileAvaloniaXaml"
+            Condition="'$(DesignTimeBuild)' != 'true' and '$(EnableAvaloniaXamlCompilation)' != 'false'" />
+
 </Project>

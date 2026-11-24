@@ -398,7 +398,7 @@ public class CodeEditor : UserControl
         HideTooltip();
         _diagnosticRenderer.Diagnostics = diagnostics
             .Where(diagnostic => diagnostic.Location.IsInSource &&
-                diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+                diagnostic.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning or DiagnosticSeverity.Info)
             .ToArray();
         _editor.TextArea.TextView.InvalidateLayer(KnownLayer.Selection);
     }
@@ -427,8 +427,12 @@ public class CodeEditor : UserControl
                     length = 1;
                 }
 
-                var pen = new Pen(diagnostic.Severity == DiagnosticSeverity.Error
-                    ? Brushes.Red : Brushes.Orange, 1);
+                var pen = new Pen(diagnostic.Severity switch
+                {
+                    DiagnosticSeverity.Error => Brushes.Red,
+                    DiagnosticSeverity.Warning => Brushes.Orange,
+                    _ => Brushes.CornflowerBlue
+                }, 1);
                 foreach (var rectangle in BackgroundGeometryBuilder.GetRectsForSegment(
                     textView, new SimpleSegment(start, length)))
                 {
@@ -1076,7 +1080,12 @@ public class CodeEditor : UserControl
             entry.Children.Add(new TextBlock
             {
                 Text = $"{diagnostic.Severity} {diagnostic.Id}",
-                Foreground = diagnostic.Severity == DiagnosticSeverity.Error ? Brushes.LightCoral : Brushes.Orange,
+                Foreground = diagnostic.Severity switch
+                {
+                    DiagnosticSeverity.Error => Brushes.LightCoral,
+                    DiagnosticSeverity.Warning => Brushes.Orange,
+                    _ => Brushes.CornflowerBlue
+                },
                 FontWeight = FontWeight.SemiBold
             });
             entry.Children.Add(new TextBlock { Text = diagnostic.GetMessage(), TextWrapping = TextWrapping.Wrap });
@@ -1205,8 +1214,30 @@ public class CodeEditor : UserControl
         try
         {
             var operations = await action.GetOperationsAsync(CancellationToken.None);
-            var changedDocument = operations.OfType<ApplyChangesOperation>()
-                .SingleOrDefault()?.ChangedSolution.GetDocument(_documentId);
+            var changedSolution = operations.OfType<ApplyChangesOperation>().SingleOrDefault()?.ChangedSolution;
+            if (changedSolution == null) return;
+            var solutionChanges = changedSolution.GetChanges(originalDocument.Project.Solution);
+            var projectChanges = solutionChanges.GetProjectChanges().ToArray();
+            if (solutionChanges.GetAddedProjects().Any() || solutionChanges.GetRemovedProjects().Any() ||
+                projectChanges.Any(change => change.ProjectId != originalDocument.Project.Id ||
+                    change.GetAddedDocuments().Any() || change.GetRemovedDocuments().Any() ||
+                    change.GetAddedAdditionalDocuments().Any() || change.GetRemovedAdditionalDocuments().Any() ||
+                    change.GetChangedAdditionalDocuments().Any() ||
+                    change.GetAddedAnalyzerConfigDocuments().Any() || change.GetRemovedAnalyzerConfigDocuments().Any() ||
+                    change.GetChangedAnalyzerConfigDocuments().Any() ||
+                    change.GetAddedMetadataReferences().Any() || change.GetRemovedMetadataReferences().Any() ||
+                    change.GetAddedProjectReferences().Any() || change.GetRemovedProjectReferences().Any() ||
+                    change.GetAddedAnalyzerReferences().Any() || change.GetRemovedAnalyzerReferences().Any() ||
+                    !Equals(change.OldProject.CompilationOptions, change.NewProject.CompilationOptions) ||
+                    !Equals(change.OldProject.ParseOptions, change.NewProject.ParseOptions) ||
+                    change.GetChangedDocuments().Any(id => id != _documentId)))
+            {
+                var menu = new ContextMenu();
+                menu.Items.Add(new MenuItem { Header = "This fix changes the project or other files and cannot be applied here", IsEnabled = false });
+                menu.Open(_editor);
+                return;
+            }
+            var changedDocument = changedSolution.GetDocument(_documentId);
             if (changedDocument is null || (_editor.Text ?? "") != snapshot)
                 return;
 

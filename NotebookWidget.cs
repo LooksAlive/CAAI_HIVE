@@ -724,13 +724,14 @@ public class NotebookWidget : UserControl, IDisposable
         {
             await Task.Delay(300, token);
             var document = _analysis.Workspace.CurrentSolution.GetDocument(_analysis.GetOrCreateDocument(cell));
-            var model = document is null ? null : await document.GetSemanticModelAsync(token);
-            if (model is null || token.IsCancellationRequested ||
+            if (document is null) return;
+            var diagnostics = (await Task.Run(() => EditorAnalysisService.GetDiagnosticsAsync(document, token), token)).ToList();
+            var currentDocument = _analysis.Workspace.CurrentSolution.GetDocument(document.Id);
+            if (currentDocument == null || !ReferenceEquals(document.Project.Solution, currentDocument.Project.Solution)) return;
+            if (token.IsCancellationRequested ||
                 !_cellEditors.TryGetValue(cell, out var currentEditor) || currentEditor != editor)
                 return;
-            var diagnostics = model.GetDiagnostics(cancellationToken: token)
-                .Where(item => item.Location.IsInSource && item.Severity >= Microsoft.CodeAnalysis.DiagnosticSeverity.Warning)
-                .ToList();
+            editor.SetDiagnostics(diagnostics);
             output.Text = string.Join("\n", diagnostics.Take(3).Select(item =>
                 $"{item.Location.GetLineSpan().StartLinePosition.Line + 1}: {item.Id} {item.GetMessage()}"));
             if (diagnostics.Count > 3)

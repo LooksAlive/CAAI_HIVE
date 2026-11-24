@@ -438,6 +438,7 @@ public partial class MainWindow : Window
             sourceSolution = sourceSolution.AddDocument(documentId, Path.GetFileName(fullPath), File.ReadAllText(fullPath))
                 .WithDocumentFilePath(documentId, fullPath);
         }
+        sourceSolution = EditorAnalysisService.AddEditorConfigs(sourceSolution, _projectId, _baseDir);
         if (!_workspace.TryApplyChanges(sourceSolution))
             throw new InvalidOperationException("The default project sources could not be loaded into the workspace.");
     }
@@ -2057,28 +2058,7 @@ public partial class MainWindow : Window
     {
         var document = _workspace.CurrentSolution.GetDocument(docId);
         if (document == null) return new List<Diagnostic>();
-
-        // 1. Get the Semantic Model (this triggers the 'real' analysis)
-        var semanticModel = await document.GetSemanticModelAsync();
-
-        // 2. Get both Syntactic (grammar) and Semantic (logic/type) errors
-        if (semanticModel != null)
-        {
-            var diagnostics = semanticModel.GetDiagnostics();
-
-            // 3. Update the UI
-            foreach (var diag in diagnostics.Where(d => d.Severity >= DiagnosticSeverity.Warning))
-            {
-                string location = diag.Location.GetLineSpan().StartLinePosition.ToString();
-                //_outputPanel.AppendOutput($"[{diag.Severity}] Line {location}: {diag.GetMessage()}");
-            }
-
-            return diagnostics.ToList();
-        }
-        else
-        {
-            return [];
-        }
+        return (await Task.Run(() => EditorAnalysisService.GetDiagnosticsAsync(document))).ToList();
     }
 
     private void HighlightDiagnostics(CodeEditor editor, IEnumerable<Diagnostic> diagnostics)
@@ -2140,9 +2120,7 @@ public partial class MainWindow : Window
             var document = _workspace.CurrentSolution.GetDocument(documentId);
             if (document == null) return;
             var text = await document.GetTextAsync(cancellationToken);
-            var model = await document.GetSemanticModelAsync(cancellationToken);
-            if (model == null) return;
-            var diagnostics = await Task.Run(() => model.GetDiagnostics(cancellationToken: cancellationToken).ToList(), cancellationToken);
+            var diagnostics = (await Task.Run(() => EditorAnalysisService.GetDiagnosticsAsync(document, cancellationToken), cancellationToken)).ToList();
             var currentDocument = _workspace.CurrentSolution.GetDocument(documentId);
             if (currentDocument == null || !text.ContentEquals(await currentDocument.GetTextAsync(cancellationToken))) return;
             cancellationToken.ThrowIfCancellationRequested();
