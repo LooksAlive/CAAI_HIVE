@@ -9,10 +9,13 @@ namespace CAAI;
 internal static class QuickActions
 {
     public static async Task<IReadOnlyList<CodeAction>> GetActionsAsync(
-        Document document, int caretOffset, CancellationToken cancellationToken, bool includeDocumentActions = true)
+        Document document, int caretOffset, CancellationToken cancellationToken, bool includeDocumentActions = true,
+        TextSpan? selection = null)
     {
         var actions = new List<CodeAction>();
         actions.AddRange(await Task.Run(() => EditorAnalysisService.GetFixesAsync(document, caretOffset, cancellationToken), cancellationToken));
+        actions.AddRange(await Task.Run(() => EditorRefactoringService.GetActionsAsync(document,
+            selection ?? new TextSpan(caretOffset, 0), cancellationToken), cancellationToken));
         if (includeDocumentActions)
         {
             var text = await document.GetTextAsync(cancellationToken);

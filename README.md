@@ -1,5 +1,17 @@
 # CAAI_HIVE
 
+## Refactoring
+
+Use **F2**, **Rename Symbol...** in the editor context menu, or the rename entry under **Ctrl+.**. Rename follows source symbol references across workspace documents, validates the identifier and rejects new compiler errors/conflicts. It leaves file names, strings, comments and unrelated overloads unchanged. Open tabs synchronize with workspace changes; affected unopened project files are surfaced as unsaved tabs. Review and use **Save All** to persist the changes. Undo is per editor, not a single workspace-wide transaction.
+
+**Ctrl+.** now combines diagnostic fixes with available `CodeRefactoringProvider` actions. The selected text span is passed to providers, enabling selection-based actions such as introducing variables where a bundled Roslyn provider supports them. Discovery is best-effort: providers requiring unavailable IDE dialogs or services may be unavailable. Trusted additional providers can be registered using `EditorRefactoringService.Register(provider)`.
+
+On a supported class, **Extract interface 'IClassName' in this file** generates an interface beside the class and adds it to the class's base list. It copies declared public instance methods and public property accessors, excluding static/private members, constructors and method overrides. Types and default parameter values are semantically expanded so aliases and nested types remain usable. This initial action supports top-level, non-generic, non-partial, non-static classes; records, events, indexers, inherited members and member-selection dialogs are not included. It is not offered if the proposed interface name already exists in the same namespace.
+
+Refactorings and fixes may update text in multiple existing workspace documents. Stale affected-document changes, file creation/removal/moves, and project configuration changes are rejected without partial application. The editor does not automatically write refactored text to disk.
+
+`IIncrementalGenerator` is a different mechanism: it produces additional source during compilation without rewriting the user's source documents. It is appropriate for repeatable generated implementations (serialization, mappings, adapters), not interactive rename or interface extraction. No generator execution pipeline is added here; generator hosting would also need generated-document navigation and generator diagnostic handling.
+
 ## Editor Linting And Fixes
 
 Live document and notebook diagnostics now combine compiler diagnostics with available bundled Roslyn IDE analyzers, project analyzer references, and CAAI's in-process rules. Suggestions appear as blue underlines and information entries; warnings remain orange and errors red. Use the existing light bulb or **Ctrl+.** on the diagnostic's line to see available fixes alongside formatting and explicit-type actions. Not every diagnostic has a fix.
@@ -26,7 +38,7 @@ Reopen the project folder after changing configuration files. Rules left at hidd
 
 `EditorAnalysisService.GetDiagnosticsAsync(document, cancellationToken)` exposes the same document-level analysis programmatically. `EditorAnalysisService.Register(analyzer, codeFixProvider)` adds trusted custom or third-party analyzers and optional fixes. Analyzers attached through `Project.AnalyzerReferences` are also executed; register their code-fix providers separately if needed. Providers and analyzers that fail report details to debug output rather than preventing other providers from running. Bundled provider discovery is best-effort: providers requiring unavailable host services are skipped.
 
-The editor uses an `AdhocWorkspace`, not an MSBuild project loader. Adding `AnalysisLevel` or analyzer NuGet references to a project file alone does **not** load all SDK `CAxxxx`, Roslynator, Sonar or StyleCop rules into this editor. Those require explicitly attaching/registering the corresponding runtime analyzers and fixes. No third-party analyzer packs are installed automatically. Only current-document text fixes are applied; fixes changing other files or project configuration are rejected visibly rather than partially applied. Fix-all and solution-wide refactoring are not exposed.
+The editor uses an `AdhocWorkspace`, not an MSBuild project loader. Adding `AnalysisLevel` or analyzer NuGet references to a project file alone does **not** load all SDK `CAxxxx`, Roslynator, Sonar or StyleCop rules into this editor. Those require explicitly attaching/registering the corresponding runtime analyzers and fixes. No third-party analyzer packs are installed automatically. Existing-document text fixes can span multiple files; structural project/file changes are rejected visibly rather than partially applied. Fix-all is not exposed.
 
 ## Input-To-Code Analysis
 

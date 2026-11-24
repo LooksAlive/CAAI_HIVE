@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -52,6 +53,7 @@ public class CodeEditor : UserControl
     private readonly Brush _background = new SolidColorBrush(Color.FromRgb(30, 30, 35));
     private QuickActionMargin? _quickActionMargin;
     private CancellationTokenSource? _quickActionRefresh;
+    private ContextMenu? _quickActionMenu;
     private ReferenceLensMargin? _referenceLensMargin;
     private CancellationTokenSource? _referenceLensRefresh;
 
@@ -68,6 +70,7 @@ public class CodeEditor : UserControl
     public event EventHandler<string>? TextChanged;
     public event EventHandler? Saved;
     public event EventHandler? SaveRequested;
+    public event EventHandler<IReadOnlyList<DocumentId>>? WorkspaceChangesApplied;
     public event Action<bool>? DirtyStateChanged;
     private BreadcrumbBar _breadcrumbBar = new();
     private BreakpointMargin? _breakpointMargin;
@@ -279,17 +282,70 @@ public class CodeEditor : UserControl
     internal void RebindWorkspace(AdhocWorkspace workspace)
     {
         _workspace = workspace;
+        SubscribeToWorkspace(workspace);
     }
 
-    public CodeEditor(string filePath, AdhocWorkspace workspace, DocumentId docId, string code)
+    public CodeEditor(string filePath, AdhocWorkspace workspace, DocumentId docId, string code, string? savedText = null)
     {
         FilePath = filePath;
         _workspace = workspace;
         _documentId = docId;
         Code = code;
-        _savedText = code;
+        _savedText = savedText ?? code;
 
         Content = Build();
+        SubscribeToWorkspace(workspace);
+    }
+
+    private void SubscribeToWorkspace(AdhocWorkspace workspace)
+    {
+        var weakEditor = new WeakReference<CodeEditor>(this);
+        workspace.RegisterWorkspaceChangedHandler(change =>
+        {
+            if (weakEditor.TryGetTarget(out var editor) && ReferenceEquals(editor._workspace, workspace) &&
+                (change.DocumentId == null || change.DocumentId == editor._documentId))
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (weakEditor.TryGetTarget(out var target)) _ = target.SynchronizeWorkspaceTextAsync(workspace);
+                });
+        });
+    }
+
+    private async Task SynchronizeWorkspaceTextAsync(AdhocWorkspace workspace)
+    {
+        try
+        {
+            if (!ReferenceEquals(_workspace, workspace) || _isUpdating) return;
+            var solution = workspace.CurrentSolution;
+            var document = solution.GetDocument(_documentId);
+            if (document == null) return;
+            var text = await document.GetTextAsync();
+            if (!ReferenceEquals(solution, workspace.CurrentSolution) || _isUpdating || !ReferenceEquals(_workspace, workspace)) return;
+            var previous = SourceText.From(_editor.Text ?? "");
+            if (text.ContentEquals(previous)) return;
+            var changes = text.GetTextChanges(previous);
+            _isUpdating = true;
+            _editor.Document.BeginUpdate();
+            try
+            {
+                foreach (var change in changes.OrderByDescending(change => change.Span.Start))
+                    _editor.Document.Replace(change.Span.Start, change.Span.Length, change.NewText ?? "");
+                Code = _editor.Text ?? "";
+            }
+            finally
+            {
+                _editor.Document.EndUpdate();
+                _isUpdating = false;
+            }
+            TextChanged?.Invoke(this, _editor.Text ?? "");
+            DirtyStateChanged?.Invoke(IsDirty);
+            ScheduleQuickActionRefresh();
+            ScheduleReferenceLensRefresh();
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Workspace editor synchronization failed: {exception}");
+        }
     }
 
     private object Build()
@@ -361,6 +417,7 @@ public class CodeEditor : UserControl
         };
         DetachedFromVisualTree += (_, _) =>
         {
+            _quickActionMenu?.Close();
             SettingsData.Instance.SettingsChanged -= OnSettingsChanged;
             _quickActionRefresh?.Cancel();
             _referenceLensRefresh?.Cancel();
@@ -768,6 +825,8 @@ public class CodeEditor : UserControl
 
         var quickActionsItem = new MenuItem { Header = "Quick Actions (Ctrl+.)" };
         quickActionsItem.Click += async (_, _) => await ShowQuickActionsAsync();
+        var renameItem = new MenuItem { Header = "Rename Symbol...", InputGesture = new KeyGesture(Key.F2) };
+        renameItem.Click += async (_, _) => await RenameSymbolAsync();
 
         // Format Document
         var formatItem = new MenuItem { Header = "Format Document" };
@@ -799,6 +858,7 @@ public class CodeEditor : UserControl
         contextMenu.Items.Add(findReferencesItem);
         contextMenu.Items.Add(separator2);
         contextMenu.Items.Add(quickActionsItem);
+        contextMenu.Items.Add(renameItem);
         contextMenu.Items.Add(formatItem);
         contextMenu.Items.Add(formatSelectionItem);
         contextMenu.Items.Add(separator3);
@@ -1152,6 +1212,13 @@ public class CodeEditor : UserControl
 
     private void Editor_PreviewKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.F2 && e.KeyModifiers == KeyModifiers.None)
+        {
+            e.Handled = true;
+            _ = RenameSymbolAsync();
+            return;
+        }
+
         if (e.Key == Key.OemPeriod && e.KeyModifiers == KeyModifiers.Control)
         {
             e.Handled = true;
@@ -1174,16 +1241,22 @@ public class CodeEditor : UserControl
 
         var snapshot = _editor.Text ?? "";
         var caretOffset = _editor.CaretOffset;
+        var selection = new TextSpan(_editor.SelectionStart, _editor.SelectionLength);
         document = document.WithText(SourceText.From(snapshot));
 
         try
         {
             _completionWindow?.Close();
-            var actions = await QuickActions.GetActionsAsync(document, caretOffset, CancellationToken.None);
-            if ((_editor.Text ?? "") != snapshot || _editor.CaretOffset != caretOffset || this.GetVisualRoot() is null)
+            var actions = await QuickActions.GetActionsAsync(document, caretOffset, CancellationToken.None, selection: selection);
+            if ((_editor.Text ?? "") != snapshot || _editor.CaretOffset != caretOffset ||
+                _editor.SelectionStart != selection.Start || _editor.SelectionLength != selection.Length || this.GetVisualRoot() is null)
                 return;
 
             var menu = new ContextMenu();
+            var renameItem = new MenuItem { Header = "Rename Symbol...", InputGesture = new KeyGesture(Key.F2) };
+            renameItem.Click += async (_, _) => await RenameSymbolAsync();
+            menu.Items.Add(renameItem);
+            menu.Items.Add(new Separator());
             if (actions.Count == 0)
             {
                 menu.Items.Add(new MenuItem { Header = "No quick actions available", IsEnabled = false });
@@ -1198,14 +1271,14 @@ public class CodeEditor : UserControl
                 }
             }
 
-            menu.Open(_editor);
+            OpenQuickActionMenu(menu);
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Quick actions failed: {ex.Message}");
             var menu = new ContextMenu();
             menu.Items.Add(new MenuItem { Header = "Could not load quick actions", IsEnabled = false });
-            menu.Open(_editor);
+            OpenQuickActionMenu(menu);
         }
     }
 
@@ -1216,51 +1289,112 @@ public class CodeEditor : UserControl
             var operations = await action.GetOperationsAsync(CancellationToken.None);
             var changedSolution = operations.OfType<ApplyChangesOperation>().SingleOrDefault()?.ChangedSolution;
             if (changedSolution == null) return;
-            var solutionChanges = changedSolution.GetChanges(originalDocument.Project.Solution);
-            var projectChanges = solutionChanges.GetProjectChanges().ToArray();
-            if (solutionChanges.GetAddedProjects().Any() || solutionChanges.GetRemovedProjects().Any() ||
-                projectChanges.Any(change => change.ProjectId != originalDocument.Project.Id ||
-                    change.GetAddedDocuments().Any() || change.GetRemovedDocuments().Any() ||
-                    change.GetAddedAdditionalDocuments().Any() || change.GetRemovedAdditionalDocuments().Any() ||
-                    change.GetChangedAdditionalDocuments().Any() ||
-                    change.GetAddedAnalyzerConfigDocuments().Any() || change.GetRemovedAnalyzerConfigDocuments().Any() ||
-                    change.GetChangedAnalyzerConfigDocuments().Any() ||
-                    change.GetAddedMetadataReferences().Any() || change.GetRemovedMetadataReferences().Any() ||
-                    change.GetAddedProjectReferences().Any() || change.GetRemovedProjectReferences().Any() ||
-                    change.GetAddedAnalyzerReferences().Any() || change.GetRemovedAnalyzerReferences().Any() ||
-                    !Equals(change.OldProject.CompilationOptions, change.NewProject.CompilationOptions) ||
-                    !Equals(change.OldProject.ParseOptions, change.NewProject.ParseOptions) ||
-                    change.GetChangedDocuments().Any(id => id != _documentId)))
-            {
-                var menu = new ContextMenu();
-                menu.Items.Add(new MenuItem { Header = "This fix changes the project or other files and cannot be applied here", IsEnabled = false });
-                menu.Open(_editor);
-                return;
-            }
-            var changedDocument = changedSolution.GetDocument(_documentId);
-            if (changedDocument is null || (_editor.Text ?? "") != snapshot)
-                return;
-
-            var changes = await changedDocument.GetTextChangesAsync(originalDocument);
-            if ((_editor.Text ?? "") != snapshot)
-                return;
-
-            _editor.Document.BeginUpdate();
-            try
-            {
-                foreach (var change in changes.OrderByDescending(change => change.Span.Start))
-                    _editor.Document.Replace(change.Span.Start, change.Span.Length, change.NewText ?? "");
-            }
-            finally
-            {
-                _editor.Document.EndUpdate();
-            }
+            if ((_editor.Text ?? "") != snapshot) return;
+            await EditorRefactoringService.ApplyTextChangesAsync(_workspace, originalDocument.Project.Solution, changedSolution);
+            WorkspaceChangesApplied?.Invoke(this, changedSolution.GetChanges(originalDocument.Project.Solution)
+                .GetProjectChanges().SelectMany(change => change.GetChangedDocuments()).ToArray());
+            await SynchronizeWorkspaceTextAsync(_workspace);
             _editor.Focus();
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Quick action failed: {ex.Message}");
+            ShowActionError(ex.Message);
         }
+    }
+
+    private void ShowActionError(string message)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem { Header = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, MaxWidth = 440 }, IsEnabled = false });
+        OpenQuickActionMenu(menu);
+    }
+
+    private void OpenQuickActionMenu(ContextMenu menu)
+    {
+        _quickActionMenu?.Close();
+        _quickActionMenu = menu;
+        var owner = TopLevel.GetTopLevel(_editor);
+        var window = owner as Window;
+        void OnPointerPressed(object? sender, PointerPressedEventArgs args)
+        {
+            if (args.Source is Visual visual && (ReferenceEquals(visual, menu) || menu.IsVisualAncestorOf(visual))) return;
+            menu.Close();
+        }
+        void OnDeactivated(object? sender, EventArgs args) => menu.Close();
+        void OnClosed(object? sender, RoutedEventArgs args)
+        {
+            owner?.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
+            if (window != null) window.Deactivated -= OnDeactivated;
+            menu.Closed -= OnClosed;
+            if (ReferenceEquals(_quickActionMenu, menu)) _quickActionMenu = null;
+        }
+        menu.Closed += OnClosed;
+        owner?.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
+        if (window != null) window.Deactivated += OnDeactivated;
+        menu.Open(_editor);
+    }
+
+    public async Task RenameSymbolAsync()
+    {
+        if (this.GetVisualRoot() is not Window owner) return;
+        var document = _workspace.CurrentSolution.GetDocument(_documentId);
+        if (document == null) return;
+        var position = _editor.CaretOffset;
+        try
+        {
+            var symbol = await SymbolFinder.FindSymbolAtPositionAsync(document, position);
+            if (symbol == null || !symbol.Locations.Any(location => location.IsInSource))
+            {
+                ShowActionError("Place the caret on a source symbol to rename.");
+                return;
+            }
+            var dialog = new Window
+            {
+                Title = $"Rename {symbol.Name}", Width = 420, SizeToContent = SizeToContent.Height,
+                CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
+            };
+            using var renameCancellation = new CancellationTokenSource();
+            dialog.Closed += (_, _) => renameCancellation.Cancel();
+            var name = new TextBox { Name = "RenameName", Text = symbol.Name, Watermark = "New name" };
+            var error = new TextBlock { Foreground = Brushes.LightCoral, TextWrapping = TextWrapping.Wrap, IsVisible = false };
+            var confirm = new Button { Name = "RenameConfirm", Content = "Rename", IsDefault = true };
+            var cancel = new Button { Content = "Cancel", IsCancel = true };
+            cancel.Click += (_, _) => dialog.Close();
+            confirm.Click += async (_, _) =>
+            {
+                confirm.IsEnabled = false;
+                try
+                {
+                    var newName = name.Text ?? "";
+                    var renamed = await Task.Run(() => EditorRefactoringService.RenameAsync(document, position, newName, renameCancellation.Token), renameCancellation.Token);
+                    await EditorRefactoringService.ApplyTextChangesAsync(_workspace, document.Project.Solution, renamed, renameCancellation.Token);
+                    WorkspaceChangesApplied?.Invoke(this, renamed.GetChanges(document.Project.Solution)
+                        .GetProjectChanges().SelectMany(change => change.GetChangedDocuments()).ToArray());
+                    dialog.Close();
+                }
+                catch (OperationCanceledException) when (renameCancellation.IsCancellationRequested) { }
+                catch (Exception exception)
+                {
+                    error.Text = exception.Message;
+                    error.IsVisible = true;
+                }
+                finally { confirm.IsEnabled = true; }
+            };
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8 };
+            buttons.Children.Add(cancel);
+            buttons.Children.Add(confirm);
+            var content = new StackPanel { Margin = new Thickness(16), Spacing = 12 };
+            content.Children.Add(new TextBlock { Text = "New name" });
+            content.Children.Add(name);
+            content.Children.Add(error);
+            content.Children.Add(buttons);
+            dialog.Content = content;
+            dialog.Opened += (_, _) => { name.Focus(); name.SelectAll(); };
+            await dialog.ShowDialog(owner);
+            _editor.Focus();
+        }
+        catch (Exception exception) { ShowActionError(exception.Message); }
     }
 
     private async Task ShowCompletionsAsync(string? inputText, CompletionTrigger trigger)

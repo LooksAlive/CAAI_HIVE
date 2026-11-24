@@ -445,29 +445,36 @@ public partial class MainWindow : Window
 
     public async Task PerformRename(ISymbol symbol, string newName)
     {
-        var options = new SymbolRenameOptions
-        {
-            RenameFile = true,
-            RenameInComments = true,
-            RenameInStrings = true,
-            RenameOverloads = true
-        };
-        var newSolution = await Renamer.RenameSymbolAsync(
-            _workspace.CurrentSolution,
-            symbol,
-            options,
-            newName);
+        var original = _workspace.CurrentSolution;
+        var renamed = await Task.Run(() => EditorRefactoringService.RenameSymbolAsync(original, symbol, newName));
+        await EditorRefactoringService.ApplyTextChangesAsync(_workspace, original, renamed);
+        await RevealRefactoredDocumentsAsync(renamed.GetChanges(original).GetProjectChanges()
+            .SelectMany(change => change.GetChangedDocuments()).ToArray());
+    }
 
-        // 1. Calculate the rename across the whole workspace
-        /*var newSolution = await Renamer.RenameSymbolAsync(
-            _workspace.CurrentSolution,
-            symbol,
-            newName,
-            _workspace.Options);
-        */
-        // 2. Apply the change to the Workspace
-        // This will trigger 'TextChanged' in all open CodeEditor tabs!
-        _workspace.TryApplyChanges(newSolution);
+    private async Task RevealRefactoredDocumentsAsync(IReadOnlyList<DocumentId> documentIds)
+    {
+        var selectedTab = _tabs.SelectedItem;
+        try
+        {
+            foreach (var id in documentIds)
+            {
+                var document = _workspace.CurrentSolution.GetDocument(id);
+                if (document?.FilePath is not { } path || !File.Exists(path)) continue;
+                var text = await document.GetTextAsync();
+                var savedText = await File.ReadAllTextAsync(path);
+                if (_tabs.Items.OfType<TabItem>().Any(tab => FindEditorInContent(tab.Content)?.DocumentId == id)) continue;
+                OpenExistingFile(path, text.ToString(), savedText);
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowNotification("Could not open all refactored files", exception.Message, NotificationType.Warning);
+        }
+        finally
+        {
+            if (selectedTab != null && _tabs.Items.Contains(selectedTab)) _tabs.SelectedItem = selectedTab;
+        }
     }
 
     public async Task FindReferences(ISymbol symbol)
@@ -2245,7 +2252,7 @@ public partial class MainWindow : Window
         _tabs.SelectedItem = tab;
     }
 
-    private SyntaxTree? OpenExistingFile(string path, string src)
+    private SyntaxTree? OpenExistingFile(string path, string src, string? savedText = null)
     {
         SyntaxTree? syntaxTree = null;
         if (IsCSharpSourceFile(path))
@@ -2256,12 +2263,13 @@ public partial class MainWindow : Window
 
         var docId = RegisterFileInWorkspace(path, src);
 
-        var editor = new CodeEditor(path, _workspace, docId, src);
+        var editor = new CodeEditor(path, _workspace, docId, src, savedText);
         editor.ConfigureDebugging(_debugBreakpoints);
         // Subscribe to events
         editor.GoToDefinitionRequested += OnGoToDefinitionRequested;
         editor.FindReferencesRequested += OnFindReferencesRequested;
         editor.FormatDocumentRequested += OnFormatDocumentRequested;
+        editor.WorkspaceChangesApplied += async (_, documentIds) => await RevealRefactoredDocumentsAsync(documentIds);
 
         var tab = new TabItem();
 
@@ -2274,7 +2282,7 @@ public partial class MainWindow : Window
 
         var headerText = new TextBlock
         {
-            Text = Path.GetFileName(path),
+            Text = editor.IsDirty ? $"{Path.GetFileName(path)} *" : Path.GetFileName(path),
             Foreground = Brushes.White,
             VerticalAlignment = VerticalAlignment.Center
         };
