@@ -948,7 +948,7 @@ public class NuGetPackageManager : UserControl
         panel.Children.Add(buttonPanel);
         dialog.Content = panel;
         
-        if (this.GetVisualRoot() is not Window owner)
+        if (TopLevel.GetTopLevel(this) is not Window owner)
             return false;
 
         await dialog.ShowDialog(owner);

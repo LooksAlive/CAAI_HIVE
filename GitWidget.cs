@@ -133,20 +133,6 @@ public sealed class GitWidget : UserControl
         AttachedToVisualTree += (_, _) => Refresh();
     }
     
-    private static IControlTemplate BuildMenuFlyoutItemTemplate(Control headerContent)
-    {
-        // Simple template: a presenter that shows our custom content.
-        return new FuncControlTemplate<MenuFlyoutItem>((item, ns) =>
-        {
-            var presenter = new ContentPresenter
-            {
-                Content = headerContent,
-                Margin = new Thickness(10, 4)
-            };
-            return presenter;
-        });
-    }
-
     private MenuFlyout BuildMoreActions()
     {
         var flyout = new MenuFlyout();
@@ -166,7 +152,7 @@ public sealed class GitWidget : UserControl
             flyout.Items.Add(item);
         }
         
-        void AddSeparator() => flyout.Items.Add(new MenuFlyoutSeparator());
+        void AddSeparator() => flyout.Items.Add(new Separator());
 
         Add("Fetch (all remotes, prune)", Symbol.Download, () => RunAction("Fetch", "fetch", "--all", "--prune"));
         Add("Pull (fast-forward only)", Symbol.ChevronDown, () => ChangeWorkTree("Pull", "pull", "--ff-only"));

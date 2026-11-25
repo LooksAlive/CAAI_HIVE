@@ -164,7 +164,7 @@ public class CodeEditor : UserControl
 
     private void ScheduleQuickActionRefresh()
     {
-        if (_quickActionMargin is null || this.GetVisualRoot() is null) return;
+        if (_quickActionMargin is null || TopLevel.GetTopLevel(this) is null) return;
 
         _quickActionRefresh?.Cancel();
         _quickActionRefresh?.Dispose();
@@ -190,7 +190,7 @@ public class CodeEditor : UserControl
 
             cancellationToken.ThrowIfCancellationRequested();
             if ((_editor.Text ?? string.Empty) != snapshot ||
-                _editor.TextArea.Caret.Line != caretLine || this.GetVisualRoot() is null)
+                _editor.TextArea.Caret.Line != caretLine || TopLevel.GetTopLevel(this) is null)
                 return;
 
             _quickActionMargin?.SetActionLine(actions.Count > 0 ? caretLine : null);
@@ -207,7 +207,7 @@ public class CodeEditor : UserControl
 
     private void ScheduleReferenceLensRefresh()
     {
-        if (_referenceLensMargin is null || this.GetVisualRoot() is null) return;
+        if (_referenceLensMargin is null || TopLevel.GetTopLevel(this) is null) return;
 
         _referenceLensRefresh?.Cancel();
         _referenceLensRefresh?.Dispose();
@@ -249,7 +249,7 @@ public class CodeEditor : UserControl
             var references = result.SelectMany(item => item.Locations).ToArray();
             cancellationToken.ThrowIfCancellationRequested();
             if ((_editor.Text ?? string.Empty) != snapshot ||
-                _editor.TextArea.Caret.Line != caretLine || this.GetVisualRoot() is null)
+                _editor.TextArea.Caret.Line != caretLine || TopLevel.GetTopLevel(this) is null)
                 return;
 
             var line = _editor.Document.GetLineByOffset(declaration.SpanStart).LineNumber;
@@ -781,7 +781,7 @@ public class CodeEditor : UserControl
         {
             // Find dialog
             var dialog = new FindReplaceDialog(_editor, false);
-            if (this.GetVisualRoot() is Window owner)
+            if (TopLevel.GetTopLevel(this) is Window owner)
                 dialog.Show(owner);
             else
                 dialog.Show();
@@ -791,7 +791,7 @@ public class CodeEditor : UserControl
         {
             // Replace dialog
             var dialog = new FindReplaceDialog(_editor, true);
-            if (this.GetVisualRoot() is Window owner)
+            if (TopLevel.GetTopLevel(this) is Window owner)
                 dialog.Show(owner);
             else
                 dialog.Show();
@@ -1353,7 +1353,7 @@ public class CodeEditor : UserControl
             _completionWindow?.Close();
             var actions = await QuickActions.GetActionsAsync(document, caretOffset, CancellationToken.None, selection: selection);
             if ((_editor.Text ?? "") != snapshot || _editor.CaretOffset != caretOffset ||
-                _editor.SelectionStart != selection.Start || _editor.SelectionLength != selection.Length || this.GetVisualRoot() is null)
+                _editor.SelectionStart != selection.Start || _editor.SelectionLength != selection.Length || TopLevel.GetTopLevel(this) is null)
                 return;
 
             var menu = new ContextMenu();
@@ -1444,7 +1444,7 @@ public class CodeEditor : UserControl
         var symbol = await GetSymbolAtCaret();
         if (symbol == null)
         {
-            if (this.GetVisualRoot() is not Window owner) return;
+            if (TopLevel.GetTopLevel(this) is not Window owner) return;
             symbol = await DialogHelper.ShowSymbolSearchDialog(owner, _workspace);
         }
         if (symbol != null) AddSymbolToEnvironmentRequested?.Invoke(this, symbol);
@@ -1452,7 +1452,7 @@ public class CodeEditor : UserControl
 
     public async Task RenameSymbolAsync()
     {
-        if (this.GetVisualRoot() is not Window owner) return;
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
         var document = _workspace.CurrentSolution.GetDocument(_documentId);
         if (document == null) return;
         var position = _editor.CaretOffset;

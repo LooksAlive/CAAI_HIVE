@@ -422,7 +422,7 @@ public class OutputPanel : UserControl
 
         dialog.Content = panel;
 
-        await dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
+        await dialog.ShowDialog(TopLevel.GetTopLevel(this) as Window ?? new Window());
 
         if (result && !string.IsNullOrEmpty(filePath))
         {

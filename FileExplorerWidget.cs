@@ -493,7 +493,7 @@ public class FileExplorerWidget : UserControl
 
     private async Task CopyPathNoConfirmation(string path)
     {
-        var window = this.GetVisualRoot() as Window;
+        var window = TopLevel.GetTopLevel(this) as Window;
         if (window?.Clipboard != null)
         {
             await window.Clipboard.SetTextAsync(path);
@@ -503,7 +503,7 @@ public class FileExplorerWidget : UserControl
     private async Task CopyPath(string path)
     {
         // Get the top-level window and access clipboard
-        var window = this.GetVisualRoot() as Window;
+        var window = TopLevel.GetTopLevel(this) as Window;
         if (window != null && window.Clipboard != null)
         {
             await window.Clipboard.SetTextAsync(path);
@@ -666,7 +666,7 @@ namespace {{Namespace}}
         await dialog.ShowDialog(owner);
     }
 
-    private Window? GetOwnerWindow() => this.GetVisualRoot() as Window;
+    private Window? GetOwnerWindow() => TopLevel.GetTopLevel(this) as Window;
 
     public void RefreshAll()
     {

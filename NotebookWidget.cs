@@ -1086,7 +1086,7 @@ message
             if (type == OutputType.Error)
             {
                 var dialog = new MessageDialog("Notebook", message, true);
-                await dialog.ShowDialog(this.GetVisualRoot() as Window ?? new Window());
+                await dialog.ShowDialog(TopLevel.GetTopLevel(this) as Window ?? new Window());
             }
         });
     }

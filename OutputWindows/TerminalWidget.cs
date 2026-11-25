@@ -164,7 +164,7 @@ public class TerminalWidget : UserControl
                  e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
             // Ctrl+Shift+C to copy selected text
-            var clipboard = this.GetVisualRoot();//?.GetClipboard();
+            var clipboard = TopLevel.GetTopLevel(this);//?.GetClipboard();
             /*if (clipboard != null && !string.IsNullOrEmpty(_outputText.SelectedText))
             {
                 Dispatcher.UIThread.InvokeAsync(async () => 
@@ -176,7 +176,7 @@ public class TerminalWidget : UserControl
                  e.KeyModifiers.HasFlag(KeyModifiers.Shift))
         {
             // Ctrl+Shift+V to paste
-            var clipboard = this.GetVisualRoot();//?.GetClipboard();
+            var clipboard = TopLevel.GetTopLevel(this);//?.GetClipboard();
             /*if (clipboard != null)
             {
                 /*Dispatcher.UIThread.InvokeAsync(async () =>

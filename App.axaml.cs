@@ -1,3 +1,7 @@
+global using Symbol = FluentAvalonia.UI.Controls.FASymbol;
+global using SymbolIcon = FluentAvalonia.UI.Controls.FASymbolIcon;
+global using Avalonia.Input.Platform;
+
 using System.Reflection;
 using Avalonia;
 using Avalonia.Controls;
@@ -24,8 +28,6 @@ using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using Avalonia.Controls.Notifications;
 using Location = Microsoft.CodeAnalysis.Location;
-using Symbol = FluentAvalonia.UI.Controls.Symbol;
-using SymbolIcon = FluentAvalonia.UI.Controls.SymbolIcon;
 
 namespace CAAI;
 
@@ -104,10 +106,9 @@ public static class DialogHelper
             MinWidth = 400,
             MinHeight = 300,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            SystemDecorations = SystemDecorations.Full,
+            WindowDecorations = WindowDecorations.Full,
             ShowInTaskbar = false,
             ExtendClientAreaToDecorationsHint = true,
-            ExtendClientAreaChromeHints = ExtendClientAreaChromeHints.NoChrome,
             Background = Brushes.Transparent,
             Padding = new Thickness(0),  // Remove any default padding
         };
