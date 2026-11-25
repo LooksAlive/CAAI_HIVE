@@ -30,6 +30,7 @@ using Avalonia.Controls.Notifications;
 using Location = Microsoft.CodeAnalysis.Location;
 
 namespace CAAI;
+using CAAI.CallGraphVisualizer;
 
 public sealed class App : Application
 {
@@ -179,6 +180,7 @@ public partial class MainWindow : Window
     private FileExplorerWidget _filesTreeView = null!;
     private GitWidget _gitWidget = null!;
     private readonly ObjectInspectorWidget1 _inspector = new();
+    private CallGraphView _graphView = new();
     // Inside MainWindow class
     private AdhocWorkspace _workspace = null!;
     private ProjectId _projectId = null!;
@@ -723,7 +725,8 @@ public partial class MainWindow : Window
             ("Inspector", Symbol.Find, _inspector),
             ("Environment", Symbol.Setting, _env),
             ("Connections", Symbol.Link, _connectionsWidget),
-            ("AST", Symbol.Document, _astViewer)
+            ("AST", Symbol.Document, _astViewer),
+            ("Call Graph", Symbol.View, _graphView),
         };
         var selectedView = views.First(view => view.Name == _activeSideView);
         var heading = new TextBlock
@@ -1063,6 +1066,18 @@ public partial class MainWindow : Window
 
     private Control BuildUI()
     {
+        // TODO implement.
+        /*
+        // 1) Extract
+        var extractor = new CallGraphExtractor(compilation);      // compilation from your AdhocWorkspace
+        var graph = await extractor.ExtractAsync(includeExternalCalls: false);
+
+        // 2) Layout
+        new GraphLayoutEngine { NodeWidth = 200, NodeHeight = 48 }.Layout(graph, LayoutKind.Layered);
+        _graphView.SetGraph(graph);
+        _graphView.FitToContent();     // call after control has Bounds (hook Loaded / LayoutUpdated)
+        */
+
         var previous = (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
             _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode,
             _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
