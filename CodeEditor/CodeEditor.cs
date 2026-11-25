@@ -584,7 +584,7 @@ public class CodeEditor : UserControl
         {
             _editor = editor;
             _onInvoked = onInvoked;
-            Width = 24;
+            Width = 118;
             _editor.TextArea.TextView.VisualLinesChanged += OnVisualLinesChanged;
         }
 
@@ -593,8 +593,48 @@ public class CodeEditor : UserControl
             _lineNumber = lineNumber;
             _symbol = symbol;
             _references = references;
-            ToolTip.SetTip(this, $"{references.Count} reference{(references.Count == 1 ? "" : "s")} to {symbol.Name}");
             Cursor = new Cursor(StandardCursorType.Hand);
+
+            var preview = new StackPanel
+            {
+                Margin = new Thickness(8),
+                Spacing = 4,
+                MaxWidth = 520
+            };
+            preview.Children.Add(new TextBlock
+            {
+                Text = $"{references.Count} reference{(references.Count == 1 ? "" : "s")} to {symbol.Name}",
+                FontWeight = FontWeight.SemiBold,
+                Foreground = Brushes.White
+            });
+
+            foreach (var reference in references
+                         .OrderBy(item => item.Document.FilePath ?? item.Document.Name, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(item => item.Location.SourceSpan.Start)
+                         .Take(5))
+            {
+                var lineSpan = reference.Location.GetLineSpan();
+                var fileName = Path.GetFileName(reference.Document.FilePath ?? reference.Document.Name);
+                preview.Children.Add(new TextBlock
+                {
+                    Text = $"{fileName}:{lineSpan.StartLinePosition.Line + 1}  {reference.Location.SourceSpan.Start}",
+                    FontFamily = new FontFamily("Consolas"),
+                    FontSize = 11,
+                    Foreground = Brushes.LightGray,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                });
+            }
+
+            if (references.Count > 5)
+                preview.Children.Add(new TextBlock
+                {
+                    Text = $"... and {references.Count - 5} more",
+                    FontSize = 11,
+                    Foreground = Brushes.Gray
+                });
+
+            ToolTip.SetTip(this, preview);
+            ToolTip.SetPlacement(this, PlacementMode.Pointer);
             InvalidateVisual();
         }
 
@@ -641,7 +681,7 @@ public class CodeEditor : UserControl
             if (line is null) return;
 
             var text = new FormattedText(
-                _references.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                $"{_references.Count} reference{(_references.Count == 1 ? "" : "s")}",
                 System.Globalization.CultureInfo.CurrentCulture,
                 FlowDirection.LeftToRight,
                 new Typeface("Segoe UI"),

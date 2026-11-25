@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Controls.Primitives;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 
@@ -45,8 +46,29 @@ public class ReferencesWindow : Window
         {
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
             Foreground = Brushes.White,
-            BorderThickness = new Thickness(0),
-            Margin = new Thickness(10, 0, 10, 10)
+            BorderThickness = new Thickness(0)
+        };
+        var previewTitle = new TextBlock
+        {
+            Text = "Select a reference to preview",
+            Foreground = Brushes.LightGray,
+            FontSize = 12,
+            FontWeight = FontWeight.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        var previewCode = new TextBlock
+        {
+            Text = "",
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            Foreground = new SolidColorBrush(Color.FromRgb(210, 210, 215)),
+            TextWrapping = TextWrapping.NoWrap
+        };
+        var previewScroll = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            Content = previewCode
         };
 
         foreach (var reference in references.OrderBy(item => item.Document.FilePath ?? item.Document.Name, StringComparer.OrdinalIgnoreCase)
@@ -81,23 +103,21 @@ public class ReferencesWindow : Window
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
 
-            var button = new Button
+            var item = new ListBoxItem
             {
                 Content = content,
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
                 Padding = new Thickness(8, 6),
-                IsEnabled = !string.IsNullOrEmpty(filePath) && File.Exists(filePath)
+                Tag = (filePath, lineSpan.StartLinePosition.Line, lineSpan.StartLinePosition.Character, source)
             };
-            ToolTip.SetTip(button, filePath ?? "Source file is unavailable");
-            button.Click += (_, _) =>
+            ToolTip.SetTip(item, filePath ?? "Source file is unavailable");
+            item.DoubleTapped += (_, _) =>
             {
                 if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
                 window.NavigateRequested?.Invoke(filePath, lineSpan.StartLinePosition.Line, lineSpan.StartLinePosition.Character);
+                window.Close();
             };
-            listBox.Items.Add(button);
+            listBox.Items.Add(item);
         }
 
         Control results = listBox;
@@ -112,10 +132,84 @@ public class ReferencesWindow : Window
             };
         }
 
+        var previewOpen = new Button
+        {
+            Content = "Open",
+            HorizontalAlignment = HorizontalAlignment.Right,
+            IsEnabled = false
+        };
+
+        listBox.SelectionChanged += (_, _) =>
+        {
+            if (listBox.SelectedItem is not ListBoxItem item || item.Tag is not ValueTuple<string?, int, int, Microsoft.CodeAnalysis.Text.SourceText> selected)
+                return;
+
+            var (filePath, line, column, source) = selected;
+            previewTitle.Text = $"{Path.GetFileName(filePath ?? "Reference")}:{line + 1},{column + 1}";
+            previewOpen.IsEnabled = !string.IsNullOrEmpty(filePath) && File.Exists(filePath);
+
+            var firstLine = Math.Max(0, line - 4);
+            var lastLine = Math.Min(source.Lines.Count - 1, line + 4);
+            var previewLines = new List<string>();
+            for (var index = firstLine; index <= lastLine; index++)
+            {
+                var prefix = index == line ? " > " : "   ";
+                previewLines.Add($"{prefix}{index + 1,5}  {source.Lines[index].ToString()}");
+            }
+            previewCode.Text = string.Join(Environment.NewLine, previewLines);
+
+            previewOpen.Tag = (filePath, line, column);
+        };
+
+        previewOpen.Click += (_, _) =>
+        {
+            if (previewOpen.Tag is not ValueTuple<string?, int, int> selected) return;
+            var (filePath, line, column) = selected;
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return;
+            window.NavigateRequested?.Invoke(filePath, line, column);
+            window.Close();
+        };
+
+        var previewHeader = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Margin = new Thickness(8)
+        };
+        previewHeader.Children.Add(previewTitle);
+        Grid.SetColumn(previewOpen, 1);
+        previewHeader.Children.Add(previewOpen);
+
+        var previewPanel = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            Background = new SolidColorBrush(Color.FromRgb(35, 35, 40))
+        };
+        previewPanel.Children.Add(previewHeader);
+        Grid.SetRow(previewScroll, 1);
+        previewScroll.Margin = new Thickness(8, 0, 8, 8);
+        previewPanel.Children.Add(previewScroll);
+
+        var split = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("280,*")
+        };
+        split.Children.Add(results);
+        var splitter = new GridSplitter
+        {
+            Width = 4,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Background = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
+            ResizeBehavior = GridResizeBehavior.PreviousAndNext
+        };
+        Grid.SetColumn(splitter, 0);
+        split.Children.Add(splitter);
+        Grid.SetColumn(previewPanel, 1);
+        split.Children.Add(previewPanel);
+
         var panel = new Grid { RowDefinitions = new RowDefinitions("Auto, *") };
         panel.Children.Add(header);
-        Grid.SetRow(results, 1);
-        panel.Children.Add(results);
+        Grid.SetRow(split, 1);
+        panel.Children.Add(split);
         window.Content = panel;
         return window;
     }
