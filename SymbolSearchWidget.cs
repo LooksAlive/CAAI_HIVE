@@ -466,9 +466,7 @@ public class SymbolSearchWidget : UserControl
         
         resultsPanel.Children.Add(resultsHeader);
 
-        // TODO: do this ???
-
-        // Results list - REMOVE MaxHeight constraint
+        // Results list
         _resultsList = new ListBox
         {
             //Height = 100,

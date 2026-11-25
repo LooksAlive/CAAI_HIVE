@@ -36,40 +36,10 @@ public sealed class App : Application
 
     public override void Initialize()
     {
-        //AvaloniaXamlLoader.Load(this);
-        //Styles.Add(new SimpleTheme());
         Styles.Add(new FluentTheme());
-        /*
-		Styles.Add(new Style(selector => selector.OfType<Button>())
-		{
-			Setters =
-			{
-				new Setter(TemplatedControl.FontSizeProperty, 6.0),
-				new Setter(TemplatedControl.PaddingProperty, new Thickness(4, 2))
-			}
-		});*/
-
-        //var semiTheme = new SemiTheme();
-        //Styles.Add(semiTheme);
-
         RequestedThemeVariant = ThemeVariant.Default;
-
-        //var editTheme = new Semi.Avalonia.AvaloniaEdit.AvaloniaEditSemiTheme(null);
-        //Styles.Add(editTheme);
-
-        // Provide the missing Fluent resource key that Semi doesn't define by default
-        // 14 is the standard desktop font size
         Resources["ControlContentThemeFontSize"] = 14.0;
-
-        // If it asks for 'ContentControlThemeFontFamily', add this too:
         Resources["ContentControlThemeFontFamily"] = FontFamily.Default;
-        /*
-        var editStyles = new StyleInclude(new Uri("avares://CAAI/App.axaml"))
-        {
-            Source = new Uri("avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml")
-        };
-        Styles.Add(editStyles);
-		*/
     }
 
     public override void OnFrameworkInitializationCompleted()
@@ -568,11 +538,7 @@ public partial class MainWindow : Window
             ShowSearchDialog();
             e.Handled = true;
         }
-        /*else if (e.Key == Key.Escape && _searchWidget.IsVisible)
-        {
-            HideSearch();
-            e.Handled = true;
-        }*/
+
     }
 
     public async void JumpToSymbol(ISymbol symbol)
@@ -677,14 +643,6 @@ public partial class MainWindow : Window
         {
             ShowSearchDialog();
             e.Handled = true;
-        }
-        else if (e.Key == Key.Escape)
-        {
-            // Close any open overlays
-            /*if (_searchWidget.IsVisible)
-            {
-                _searchWidget.IsVisible = false;
-            }*/
         }
     }
 
@@ -855,14 +813,6 @@ public partial class MainWindow : Window
         };
 
         // Editor area
-        /*_tabs = new TabControl
-		{
-			HorizontalAlignment = HorizontalAlignment.Stretch,
-			VerticalAlignment = VerticalAlignment.Stretch,
-			Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
-			Foreground = Brushes.White,
-			TabStripPlacement = Dock.Top
-		};*/
 
         // Bottom splitter (between editors and output)
         var bottomSplitter = new GridSplitter
