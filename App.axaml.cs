@@ -275,10 +275,11 @@ public partial class MainWindow : Window
         if (_tabs.Items.OfType<TabItem>().Select(tab => tab.Content).OfType<FilePreviewControl>().Any(preview => preview.IsDirty))
             throw new InvalidOperationException("Save or close modified preview tabs before opening another project.");
 
-        var files = GetProjectSourceFiles(folderPath);
-        var sources = new List<(string Path, string Content)>(files.Length);
-        foreach (var file in files)
-            sources.Add((Path.GetFullPath(file), await File.ReadAllTextAsync(file)));
+        var sources = GetProjectSourceFiles(folderPath)
+            .AsParallel()
+            .AsOrdered()
+            .Select(file => (Path: Path.GetFullPath(file), Content: File.ReadAllText(file)))
+            .ToArray();
 
         var solution = _workspace.CurrentSolution;
         var oldDocumentIds = solution.GetProject(_projectId)?.DocumentIds.ToArray() ?? Array.Empty<DocumentId>();
@@ -318,7 +319,7 @@ public partial class MainWindow : Window
         RememberProjectFolder(folderPath);
         _ = RefreshClassHierarchyAsync();
         UpdateStatusBar();
-        ShowNotification("Project loaded", $"{Path.GetFileName(folderPath)} ({sources.Count} C# files)", NotificationType.Success);
+        ShowNotification("Project loaded", $"{Path.GetFileName(folderPath)} ({sources.Length} C# files)", NotificationType.Success);
     }
 
     private static string GetInitialProjectPath()
@@ -411,13 +412,22 @@ public partial class MainWindow : Window
             // Handle failure if necessary
         }
 
+        var sources = GetProjectSourceFiles(_baseDir)
+            .AsParallel()
+            .AsOrdered()
+            .Select(filePath =>
+            {
+                var fullPath = Path.GetFullPath(filePath);
+                return (FullPath: fullPath, Content: File.ReadAllText(fullPath));
+            })
+            .ToArray();
+
         var sourceSolution = _workspace.CurrentSolution;
-        foreach (var filePath in GetProjectSourceFiles(_baseDir))
+        foreach (var source in sources)
         {
-            var fullPath = Path.GetFullPath(filePath);
             var documentId = DocumentId.CreateNewId(_projectId);
-            sourceSolution = sourceSolution.AddDocument(documentId, Path.GetFileName(fullPath), File.ReadAllText(fullPath))
-                .WithDocumentFilePath(documentId, fullPath);
+            sourceSolution = sourceSolution.AddDocument(documentId, Path.GetFileName(source.FullPath), SourceText.From(source.Content))
+                .WithDocumentFilePath(documentId, source.FullPath);
         }
         sourceSolution = EditorAnalysisService.AddEditorConfigs(sourceSolution, _projectId, _baseDir);
         if (!_workspace.TryApplyChanges(sourceSolution))
@@ -2335,9 +2345,17 @@ public partial class MainWindow : Window
 
     private async void OnFindReferencesRequested(object? sender, FindReferencesEventArgs e)
     {
-        var referencesWindow = await ReferencesWindow.CreateAsync(e.Symbol, e.References ?? new List<ReferenceLocation>());
-        referencesWindow.NavigateRequested += (filePath, line, column) => OpenFileAtLine(filePath, line, column);
-        referencesWindow.Show(this);
+        try
+        {
+            var referencesWindow = await ReferencesWindow.CreateAsync(e.Symbol, e.References ?? new List<ReferenceLocation>());
+            referencesWindow.NavigateRequested += (filePath, line, column) => OpenFileAtLine(filePath, line, column);
+            if (!referencesWindow.IsVisible)
+                referencesWindow.Show(this);
+        }
+        catch (Exception exception)
+        {
+            ShowNotification("References", $"Could not open references: {exception.Message}", NotificationType.Error);
+        }
     }
 
     private void OnFormatDocumentRequested(object? sender, EventArgs e)

@@ -10,12 +10,15 @@ using Avalonia.Media;
 using Microsoft.CodeAnalysis;
 using System.Linq;
 using System.Collections.Generic;
+using AvaloniaEdit;
+using AvaloniaEdit.Highlighting;
 
 namespace CAAI;
 
 public static class SymbolTooltip
 {
-    public static ToolTip CreateRichTooltip(ISymbol symbol)
+    public static ToolTip CreateRichTooltip(ISymbol symbol, Action<ISymbol>? showReferences = null,
+        int referenceCount = 0, Action? keepOpen = null, Action? scheduleClose = null)
     {
         var tooltip = new ToolTip
         {
@@ -28,9 +31,12 @@ public static class SymbolTooltip
             MaxHeight = 370,
         };
 
+        tooltip.PointerEntered += (_, _) => keepOpen?.Invoke();
+        tooltip.PointerExited += (_, _) => scheduleClose?.Invoke();
+
         tooltip.Content = new ScrollViewer
         {
-            Content = CreateTooltipContent(symbol),
+            Content = CreateTooltipContent(symbol, showReferences, referenceCount),
             MaxHeight = 360,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
@@ -39,7 +45,7 @@ public static class SymbolTooltip
         return tooltip;
     }
 
-    private static Control CreateTooltipContent(ISymbol symbol)
+    private static Control CreateTooltipContent(ISymbol symbol, Action<ISymbol>? showReferences, int referenceCount)
     {
         var mainBorder = new Border
         {
@@ -52,6 +58,11 @@ public static class SymbolTooltip
         // Header with type info and copy button
         var header = CreateModernHeader(symbol);
         stack.Children.Add(header);
+
+        // C#-style definition preview
+        var definition = CreateDefinitionPreview(symbol);
+        if (definition != null)
+            stack.Children.Add(definition);
 
         // Description section
         var description = CreateDescriptionSection(symbol);
@@ -72,6 +83,34 @@ public static class SymbolTooltip
         var documentation = CreateDocumentationSection(symbol);
         if (documentation != null)
             stack.Children.Add(documentation);
+
+        if (showReferences != null)
+        {
+            var actions = new Border
+            {
+                Padding = new Thickness(8, 6),
+                Background = new SolidColorBrush(Color.FromRgb(44, 44, 46))
+            };
+            var referencesButton = new Button
+            {
+                Content = referenceCount == 1 ? "1 Reference" : $"{referenceCount} References",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(8, 4),
+                Background = new SolidColorBrush(Color.FromRgb(55, 55, 60)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(75, 75, 80)),
+                BorderThickness = new Thickness(1),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            referencesButton.PointerPressed += (_, e) =>
+            {
+                if (!e.GetCurrentPoint(referencesButton).Properties.IsLeftButtonPressed) return;
+                e.Handled = true;
+                showReferences(symbol);
+            };
+            actions.Child = referencesButton;
+            stack.Children.Add(actions);
+        }
 
         return mainBorder;
     }
@@ -152,6 +191,45 @@ public static class SymbolTooltip
 
         header.Child = grid;
         return header;
+    }
+
+    private static Border? CreateDefinitionPreview(ISymbol symbol)
+    {
+        var signature = symbol switch
+        {
+            IMethodSymbol method => $"{GetTypeName(method.ReturnType)} {method.Name}({string.Join(", ", method.Parameters.Select(parameter => $"{GetTypeName(parameter.Type)} {parameter.Name}"))})",
+            IPropertySymbol property => $"{GetTypeName(property.Type)} {property.Name}",
+            IFieldSymbol field => $"{GetTypeName(field.Type)} {field.Name}",
+            IEventSymbol eventSymbol => $"event {GetTypeName(eventSymbol.Type)} {eventSymbol.Name}",
+            INamedTypeSymbol type => $"{type.TypeKind.ToString().ToLowerInvariant()} {type.Name}",
+            _ => null
+        };
+
+        if (signature == null) return null;
+
+        var border = new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(24, 24, 26)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 58)),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(8, 6)
+        };
+
+        border.Child = new TextEditor
+        {
+            Text = signature,
+            IsReadOnly = true,
+            ShowLineNumbers = false,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 11,
+            Background = Brushes.Transparent,
+            Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
+            SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#")
+        };
+
+        return border;
     }
 
     private static Border? CreateDescriptionSection(ISymbol symbol)

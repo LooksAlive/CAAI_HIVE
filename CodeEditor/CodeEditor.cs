@@ -584,7 +584,8 @@ public class CodeEditor : UserControl
         {
             _editor = editor;
             _onInvoked = onInvoked;
-            Width = 118;
+            Width = 0;
+            IsVisible = false;
             _editor.TextArea.TextView.VisualLinesChanged += OnVisualLinesChanged;
         }
 
@@ -680,16 +681,7 @@ public class CodeEditor : UserControl
                 targetLine <= candidate.LastDocumentLine.LineNumber);
             if (line is null) return;
 
-            var text = new FormattedText(
-                $"{_references.Count} reference{(_references.Count == 1 ? "" : "s")}",
-                System.Globalization.CultureInfo.CurrentCulture,
-                FlowDirection.LeftToRight,
-                new Typeface("Segoe UI"),
-                10,
-                new SolidColorBrush(Color.FromRgb(110, 190, 220)));
-            var y = line.GetTextLineVisualYPosition(line.TextLines[0], VisualYPosition.LineMiddle) -
-                    view.ScrollOffset.Y - text.Height / 2;
-            context.DrawText(text, new Point(2, y));
+
         }
 
         private void OnVisualLinesChanged(object? sender, EventArgs e) => InvalidateVisual();
@@ -733,7 +725,7 @@ public class CodeEditor : UserControl
         // Tooltip with delay and proper positioning
         _editor.TextArea.TextView.AddHandler(InputElement.PointerMovedEvent,
             TextView_PointerMoved, RoutingStrategies.Tunnel, handledEventsToo: true);
-        _editor.TextArea.TextView.PointerExited += (_, _) => HideTooltip();
+        _editor.TextArea.TextView.PointerExited += (_, _) => ScheduleTooltipClose();
 
         // Hide tooltip when scrolling
         _editor.TextArea.TextView.PointerWheelChanged += (_, _) => HideTooltip();
@@ -958,7 +950,7 @@ public class CodeEditor : UserControl
             // Show save confirmation
             _toolTip.Content = "Saved!";
             _toolTip.IsVisible = true;
-            Dispatcher.UIThread.Post(HideTooltip, DispatcherPriority.Default);
+            Dispatcher.UIThread.Post(() => HideTooltip(), DispatcherPriority.Default);
             return true;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
@@ -966,7 +958,7 @@ public class CodeEditor : UserControl
             SaveError = exception.Message;
             _toolTip.Content = $"Save error: {exception.Message}";
             _toolTip.IsVisible = true;
-            Dispatcher.UIThread.Post(HideTooltip, DispatcherPriority.Default);
+            Dispatcher.UIThread.Post(() => HideTooltip(), DispatcherPriority.Default);
             return false;
         }
     }
@@ -1007,6 +999,30 @@ public class CodeEditor : UserControl
             Column = lineSpan.StartLinePosition.Character,
             Symbol = symbol
         });
+    }
+
+    private async Task FindReferencesForSymbolAsync(ISymbol symbol)
+    {
+        try
+        {
+            var project = _workspace.CurrentSolution.Projects.FirstOrDefault();
+            if (project == null) return;
+
+            var references = await SymbolFinder.FindReferencesAsync(symbol, project.Solution);
+            var allReferences = references.SelectMany(reference => reference.Locations).ToList();
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                FindReferencesRequested?.Invoke(this, new FindReferencesEventArgs
+                {
+                    Symbol = symbol,
+                    References = allReferences
+                });
+            });
+        }
+        catch (Exception exception)
+        {
+            System.Diagnostics.Debug.WriteLine($"Find references failed: {exception.Message}");
+        }
     }
 
     // Find references
@@ -1144,16 +1160,10 @@ public class CodeEditor : UserControl
         if (!textView.VisualLinesValid) return;
         var position = e.GetPosition(textView);
         if (!new Rect(textView.Bounds.Size).Contains(position))
-        {
-            HideTooltip();
             return;
-        }
         var textPosition = textView.GetPositionFloor(position + textView.ScrollOffset);
         if (!textPosition.HasValue)
-        {
-            HideTooltip();
             return;
-        }
         var line = _editor.Document.GetLineByNumber(textPosition.Value.Line);
         var offset = line.Offset + Math.Clamp(textPosition.Value.Column - 1, 0, line.Length);
         if (_hoverOffset == offset) return;
@@ -1237,7 +1247,24 @@ public class CodeEditor : UserControl
             if (symbol == null && syntaxToken.Parent.Parent != null)
                 symbol = model.GetSymbolInfo(syntaxToken.Parent.Parent, cancellationToken).Symbol;
             if (symbol == null) return;
-            tooltip = SymbolTooltip.CreateRichTooltip(symbol);
+            var allReferences = new List<ReferenceLocation>();
+            var project = _workspace.CurrentSolution.Projects.FirstOrDefault();
+            if (project != null)
+            {
+                var referenceSearch = await SymbolFinder.FindReferencesAsync(symbol, project.Solution, cancellationToken);
+                allReferences = referenceSearch.SelectMany(reference => reference.Locations).ToList();
+            }
+
+            tooltip = SymbolTooltip.CreateRichTooltip(symbol, symbolToFind =>
+            {
+                KeepTooltipOpen();
+                ToolTip.SetIsOpen(_editor, false);
+                FindReferencesRequested?.Invoke(this, new FindReferencesEventArgs
+                {
+                    Symbol = symbolToFind,
+                    References = allReferences
+                });
+            }, allReferences.Count, KeepTooltipOpen, ScheduleTooltipClose);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -1247,11 +1274,34 @@ public class CodeEditor : UserControl
         ToolTip.SetIsOpen(_editor, true);
     }
 
-    private void HideTooltip()
+    private CancellationTokenSource? _tooltipHideCts;
+
+    private void KeepTooltipOpen()
     {
-        _toolTipCts?.Cancel();
-        _hoverOffset = null;
-        ToolTip.SetIsOpen(_editor, false);
+        _tooltipHideCts?.Cancel();
+        _tooltipHideCts?.Dispose();
+        _tooltipHideCts = null;
+    }
+
+    private void ScheduleTooltipClose() => HideTooltip(2000);
+
+    private async void HideTooltip(int delayMilliseconds = 0)
+    {
+        _tooltipHideCts?.Cancel();
+        _tooltipHideCts?.Dispose();
+        _tooltipHideCts = new CancellationTokenSource();
+        var hideToken = _tooltipHideCts.Token;
+
+        try
+        {
+            await Task.Delay(delayMilliseconds, hideToken);
+            if (hideToken != _tooltipHideCts?.Token) return;
+            if (_toolTip != null && ToolTip.GetIsOpen(_editor))
+                ToolTip.SetIsOpen(_editor, false);
+            _toolTipCts?.Cancel();
+            _hoverOffset = null;
+        }
+        catch (OperationCanceledException) { }
     }
 
     private async void TextArea_TextEntered(object? sender, TextInputEventArgs e)
