@@ -40,6 +40,13 @@ public sealed class App : Application
         RequestedThemeVariant = ThemeVariant.Default;
         Resources["ControlContentThemeFontSize"] = 14.0;
         Resources["ContentControlThemeFontFamily"] = FontFamily.Default;
+
+        Window.KeyDownEvent.AddClassHandler<Window>((window, e) =>
+        {
+            if (e.Handled || e.Key != Key.Escape || window is MainWindow) return;
+            e.Handled = true;
+            window.Close();
+        }, RoutingStrategies.Bubble, handledEventsToo: true);
     }
 
     public override void OnFrameworkInitializationCompleted()

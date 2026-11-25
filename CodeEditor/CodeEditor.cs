@@ -1339,7 +1339,7 @@ public class CodeEditor : UserControl
         void OnClosed(object? sender, RoutedEventArgs args)
         {
             owner?.RemoveHandler(InputElement.PointerPressedEvent, OnPointerPressed);
-            if (window != null) window.Deactivated -= OnDeactivated;
+            window?.Deactivated -= OnDeactivated;
             menu.Closed -= OnClosed;
             if (ReferenceEquals(_quickActionMenu, menu)) _quickActionMenu = null;
         }
