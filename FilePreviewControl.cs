@@ -29,8 +29,6 @@ internal sealed class FilePreviewControl : UserControl, IDisposable
     private TextBox? _textEditor;
     private Markdown.Avalonia.MarkdownScrollViewer? _markdownPreview;
     private Grid? _markdownLayout;
-    private TextBlock? _fileStatus;
-    private Button? _saveButton;
     private string _savedText = string.Empty;
     private readonly bool _isMarkdown;
 
@@ -53,16 +51,12 @@ internal sealed class FilePreviewControl : UserControl, IDisposable
             RowDefinitions = new RowDefinitions("Auto,*"),
             Background = new SolidColorBrush(Color.FromRgb(30, 30, 35))
         };
-        _fileStatus = new TextBlock
+        if (_isMarkdown)
         {
-            Text = "Saved",
-            Foreground = Brushes.LightGray,
-            FontSize = 12,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        var toolbar = CreateToolbar();
-        Grid.SetRow(toolbar, 0);
-        layout.Children.Add(toolbar);
+            var toolbar = CreateToolbar();
+            Grid.SetRow(toolbar, 0);
+            layout.Children.Add(toolbar);
+        }
         var body = CreateBody(extension);
         Grid.SetRow(body, 1);
         layout.Children.Add(body);
@@ -79,24 +73,15 @@ internal sealed class FilePreviewControl : UserControl, IDisposable
             Spacing = 6,
             Margin = new Thickness(8, 5)
         };
-        _saveButton = new Button { Content = "Save", IsEnabled = false };
-        _saveButton.Click += (_, _) => SaveRequested?.Invoke(this, EventArgs.Empty);
-        toolbar.Children.Add(_saveButton);
-
-        if (_isMarkdown)
-        {
-            var editButton = new Button { Content = "Edit" };
-            var previewButton = new Button { Content = "Preview" };
-            var splitButton = new Button { Content = "Split", IsEnabled = true };
-            editButton.Click += (_, _) => SetMarkdownMode("Edit");
-            previewButton.Click += (_, _) => SetMarkdownMode("Preview");
-            splitButton.Click += (_, _) => SetMarkdownMode("Split");
-            toolbar.Children.Add(editButton);
-            toolbar.Children.Add(previewButton);
-            toolbar.Children.Add(splitButton);
-        }
-
-        toolbar.Children.Add(_fileStatus!);
+        var editButton = new Button { Content = "Edit" };
+        var previewButton = new Button { Content = "Preview" };
+        var splitButton = new Button { Content = "Split", IsEnabled = true };
+        editButton.Click += (_, _) => SetMarkdownMode("Edit");
+        previewButton.Click += (_, _) => SetMarkdownMode("Preview");
+        splitButton.Click += (_, _) => SetMarkdownMode("Split");
+        toolbar.Children.Add(editButton);
+        toolbar.Children.Add(previewButton);
+        toolbar.Children.Add(splitButton);
         return toolbar;
     }
 
@@ -219,9 +204,6 @@ internal sealed class FilePreviewControl : UserControl, IDisposable
 
     private void UpdateFileStatus()
     {
-        if (_fileStatus is null) return;
-        _fileStatus.Text = IsDirty ? "Modified" : "Saved";
-        if (_saveButton != null) _saveButton.IsEnabled = IsDirty;
         DirtyStateChanged?.Invoke(IsDirty);
     }
 
