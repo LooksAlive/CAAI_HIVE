@@ -88,6 +88,7 @@ public class CodeEditor : UserControl
     public event EventHandler<GoToDefinitionEventArgs>? GoToDefinitionRequested;
     public event EventHandler<FindReferencesEventArgs>? FindReferencesRequested;
     public event EventHandler? FormatDocumentRequested;
+    public event EventHandler<ISymbol>? AddSymbolToEnvironmentRequested;
 
     public void SetBreadcrumbBar()
     {
@@ -739,6 +740,11 @@ public class CodeEditor : UserControl
             Save();
             e.Handled = true;
         }
+        else if (e.Key == Key.E && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+        {
+            await ShowAddSymbolToEnvironmentDialogAsync();
+            e.Handled = true;
+        }
         else if (e.Key == Key.F && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             // Find dialog
@@ -828,6 +834,13 @@ public class CodeEditor : UserControl
         var renameItem = new MenuItem { Header = "Rename Symbol...", InputGesture = new KeyGesture(Key.F2) };
         renameItem.Click += async (_, _) => await RenameSymbolAsync();
 
+        var addToEnvironmentItem = new MenuItem
+        {
+            Header = "Add Symbol to Environment...",
+            InputGesture = new KeyGesture(Key.E, KeyModifiers.Control | KeyModifiers.Shift)
+        };
+        addToEnvironmentItem.Click += async (_, _) => await ShowAddSymbolToEnvironmentDialogAsync();
+
         // Format Document
         var formatItem = new MenuItem { Header = "Format Document" };
         formatItem.Click += (_, _) => FormatDocument();
@@ -859,6 +872,7 @@ public class CodeEditor : UserControl
         contextMenu.Items.Add(separator2);
         contextMenu.Items.Add(quickActionsItem);
         contextMenu.Items.Add(renameItem);
+        contextMenu.Items.Add(addToEnvironmentItem);
         contextMenu.Items.Add(formatItem);
         contextMenu.Items.Add(formatSelectionItem);
         contextMenu.Items.Add(separator3);
@@ -1333,6 +1347,17 @@ public class CodeEditor : UserControl
         owner?.AddHandler(InputElement.PointerPressedEvent, OnPointerPressed, RoutingStrategies.Tunnel, handledEventsToo: true);
         if (window != null) window.Deactivated += OnDeactivated;
         menu.Open(_editor);
+    }
+
+    private async Task ShowAddSymbolToEnvironmentDialogAsync()
+    {
+        var symbol = await GetSymbolAtCaret();
+        if (symbol == null)
+        {
+            if (this.GetVisualRoot() is not Window owner) return;
+            symbol = await DialogHelper.ShowSymbolSearchDialog(owner, _workspace);
+        }
+        if (symbol != null) AddSymbolToEnvironmentRequested?.Invoke(this, symbol);
     }
 
     public async Task RenameSymbolAsync()

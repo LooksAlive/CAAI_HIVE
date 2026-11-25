@@ -1030,7 +1030,7 @@ public class EnvironmentWidget : UserControl
         dialog.ShowDialog(owner);
     }
 
-    private void AddSymbolEntity(ISymbol symbol)
+    public void AddSymbolEntity(ISymbol symbol)
     {
         var existing = _entities.FirstOrDefault(entity =>
             entity.Type == EntityType.CodeSymbol && SymbolEqualityComparer.Default.Equals(entity.RoslynSymbol, symbol));

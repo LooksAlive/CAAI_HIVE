@@ -2239,6 +2239,11 @@ public partial class MainWindow : Window
         editor.GoToDefinitionRequested += OnGoToDefinitionRequested;
         editor.FindReferencesRequested += OnFindReferencesRequested;
         editor.FormatDocumentRequested += OnFormatDocumentRequested;
+        editor.AddSymbolToEnvironmentRequested += (_, symbol) =>
+        {
+            _activateSideView?.Invoke("Environment");
+            _env.AddSymbolEntity(symbol);
+        };
         editor.WorkspaceChangesApplied += async (_, documentIds) => await RevealRefactoredDocumentsAsync(documentIds);
 
         var tab = new TabItem();
