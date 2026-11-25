@@ -114,7 +114,6 @@ public class EnvironmentWidget : UserControl
         DetachedFromVisualTree += (_, _) => Store.Changed -= OnStoreChanged;
         SetupKeyboardHandling();
         BuildContextMenu();
-        _entityTree.ContextMenu = _contextMenu;
         if (_entities.Count == 0) AddDefaultEntities();
         ApplyFilter();
     }
@@ -320,8 +319,7 @@ public class EnvironmentWidget : UserControl
             Background = Brushes.Transparent,
             Foreground = Brushes.White,
             ItemsSource = _entities,
-            ItemTemplate = CreateEntityTemplate(),
-            ContextMenu = _contextMenu
+            ItemTemplate = CreateEntityTemplate()
         };
         _entityTree.SelectionChanged += OnEntitySelectionChanged;
         _entityTree.DoubleTapped += OnEntityDoubleTapped;
@@ -432,7 +430,12 @@ public class EnvironmentWidget : UserControl
 
     private void BuildContextMenu()
     {
-        _contextMenu = new ContextMenu
+        _contextMenu = CreateContextMenu();
+    }
+
+    private ContextMenu CreateContextMenu()
+    {
+        var menu = new ContextMenu
         {
             Background = new SolidColorBrush(Color.FromRgb(40, 40, 45)),
             Foreground = Brushes.White,
@@ -459,10 +462,10 @@ public class EnvironmentWidget : UserControl
         viewMenu.Items.Add(CreateMenuItem("Collapse All", (_, _) => CollapseAll()));
         viewMenu.Items.Add(CreateMenuItem("Refresh", (_, _) => RefreshView(), Key.F5));
 
-        _contextMenu.Items.Add(addMenu);
-        _contextMenu.Items.Add(removeMenu);
-        _contextMenu.Items.Add(ioMenu);
-        _contextMenu.Items.Add(viewMenu);
+        menu.Items.Add(addMenu);
+        menu.Items.Add(removeMenu);
+        menu.Items.Add(ioMenu);
+        menu.Items.Add(viewMenu);
         var connect = new MenuItem { Name = "ConnectEnvironmentEntity", Header = "Connect to..." };
         connect.Click += (_, _) =>
         {
@@ -481,17 +484,19 @@ public class EnvironmentWidget : UserControl
             }
             catch (Exception exception) { UpdateStatus(exception.Message, true); }
         };
-        _contextMenu.Opened += (_, _) =>
+        menu.Opened += (_, _) =>
         {
             connect.IsEnabled = _entityTree.SelectedItem is EnvironmentEntity;
             members.IsEnabled = _entityTree.SelectedItem is EnvironmentEntity { Type: EntityType.DataValue, Value: not null };
         };
-        _contextMenu.Items.Add(new Separator());
-        _contextMenu.Items.Add(connect);
-        _contextMenu.Items.Add(members);
-        _contextMenu.Items.Add(new Separator());
-        _contextMenu.Items.Add(CreateMenuItem("📋 Copy Name", (_, _) => CopySelectedName()));
-        _contextMenu.Items.Add(CreateMenuItem("📋 Copy Value", (_, _) => CopySelectedValue()));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(connect);
+        menu.Items.Add(members);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(CreateMenuItem("📋 Copy Name", (_, _) => CopySelectedName()));
+        menu.Items.Add(CreateMenuItem("📋 Copy Value", (_, _) => CopySelectedValue()));
+
+        return menu;
     }
 
     private MenuItem CreateMenuItem(string header, EventHandler<object> handler, Key? gestureKey = null, KeyModifiers? gestureModifiers = null)
@@ -514,7 +519,7 @@ public class EnvironmentWidget : UserControl
 
     private void ShowContextMenu(Button button)
     {
-        _contextMenu.Open(button);
+        CreateContextMenu().Open(button);
     }
 
     #endregion
@@ -812,7 +817,6 @@ public class EnvironmentWidget : UserControl
             var hitTest = _entityTree.InputHitTest(e.GetPosition(_entityTree));
             if (hitTest != null)
             {
-                // Select item under mouse for context menu operations
                 var visual = hitTest as Visual;
                 while (visual != null)
                 {
@@ -823,6 +827,9 @@ public class EnvironmentWidget : UserControl
                     }
                     visual = visual.GetVisualParent() as Visual;
                 }
+
+                CreateContextMenu().Open(_entityTree);
+                e.Handled = true;
             }
         }
     }
