@@ -29,6 +29,8 @@ public partial class MainMenuWidget : UserControl
     public event Action<bool>? OnToggleStructure;
     public event Action<bool>? OnToggleWordWrap;
     public event Action<bool>? OnToggleOutput;
+    public event Action? OnOpenCallFlowGraph;
+    public event Action? OnOpenControlFlowGraph;
 
     public void SetOutputVisible(bool visible) => MenuToggleOutput.IsChecked = visible;
 
@@ -118,6 +120,8 @@ public partial class MainMenuWidget : UserControl
         MenuToggleStructure.Click += (s, e) => OnToggleStructure?.Invoke(MenuToggleStructure.IsChecked);
         MenuToggleWordWrap.Click += (s, e) => OnToggleWordWrap?.Invoke(MenuToggleWordWrap.IsChecked);
         MenuToggleOutput.Click += (s, e) => OnToggleOutput?.Invoke(MenuToggleOutput.IsChecked);
+        MenuCallFlowGraph.Click += (_, _) => OnOpenCallFlowGraph?.Invoke();
+        MenuControlFlowGraph.Click += (_, _) => OnOpenControlFlowGraph?.Invoke();
 
         // === Run / Debug Subscriptions ===
         MenuRunProject.Click      += (s, e) => OnRunProject?.Invoke();

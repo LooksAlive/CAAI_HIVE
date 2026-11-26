@@ -1,5 +1,17 @@
 # CAAI_HIVE
 
+## Call Flow And Control Flow Graphs
+
+Open **View > Call Flow Graph** or **View > Control Flow Graph**. Each opens a closable document tab beside editor and notebook tabs; choosing the same command again selects and refreshes the existing graph tab.
+
+Call flow defaults to **Focused method**, starting with the method at the editor caret and two levels of callees. Search and select a method, choose **Callees**, **Callers** or **Both**, and adjust **Depth** (0-6). Double-click a node to focus its flow. Focused graphs are limited to 80 methods, with a notice when truncated. **Whole project** remains available as a secondary overview; selecting a method returns to focused mode. Refresh preserves a manually chosen focus unless the editor caret has moved.
+
+Call flow shows the current workspace project's method declarations and statically resolved invocation edges, including isolated methods and recursion. Choose layered, grid or circular layout, and enable **External calls** to include referenced library methods. This is a static call graph, not an execution trace; constructor calls, implicit property accesses and runtime dispatch are not fully modeled.
+
+Control flow uses Roslyn's basic blocks for the method at the last active editor caret. The method picker also includes executable constructors, operators and explicit accessors across the project. Blocks show operation/condition text, entry and exit, with true/false and return labels where applicable. Hover a node for its full text.
+
+Use the refresh icon after workspace edits or project changes, and the fit icon to fit the graph. Drag empty canvas space (or use the middle/right mouse button) to pan; use the mouse wheel to zoom. Closing a graph tab cancels its pending analysis.
+
 ## Statistics And Similarity
 
 Open **File > New Code Analysis**, then **Similarity**. The existing project counts, complexity estimates, naming-convention suggestions and exact normalized method-structure groups are retained. The Similarity tab now adds scored symbol pairs, category/symbol-kind filters, a 65-100% threshold, name/file filtering, shared evidence and source-navigation buttons.

@@ -180,7 +180,8 @@ public partial class MainWindow : Window
     private FileExplorerWidget _filesTreeView = null!;
     private GitWidget _gitWidget = null!;
     private readonly ObjectInspectorWidget1 _inspector = new();
-    private CallGraphView _graphView = new();
+    private DocumentId? _graphSourceDocument;
+    private int _graphSourceOffset;
     // Inside MainWindow class
     private AdhocWorkspace _workspace = null!;
     private ProjectId _projectId = null!;
@@ -726,7 +727,6 @@ public partial class MainWindow : Window
             ("Environment", Symbol.Setting, _env),
             ("Connections", Symbol.Link, _connectionsWidget),
             ("AST", Symbol.Document, _astViewer),
-            ("Call Graph", Symbol.View, _graphView),
         };
         var selectedView = views.First(view => view.Name == _activeSideView);
         var heading = new TextBlock
@@ -1005,6 +1005,11 @@ public partial class MainWindow : Window
     private void UpdateActiveStatusEditor()
     {
         var tab = _tabs.SelectedItem as TabItem;
+        if (FindEditorInContent(tab?.Content) is CodeEditor graphSource)
+        {
+            _graphSourceDocument = graphSource.DocumentId;
+            _graphSourceOffset = graphSource._editor.CaretOffset;
+        }
         SetStatusEditor(tab?.Content as TextEditor ?? FindEditorInContent(tab?.Content)?._editor);
         if (_hierarchyTree?.IsFollowingCaret == true) _ = RefreshClassHierarchyAsync();
     }
@@ -1066,18 +1071,6 @@ public partial class MainWindow : Window
 
     private Control BuildUI()
     {
-        // TODO implement.
-        /*
-        // 1) Extract
-        var extractor = new CallGraphExtractor(compilation);      // compilation from your AdhocWorkspace
-        var graph = await extractor.ExtractAsync(includeExternalCalls: false);
-
-        // 2) Layout
-        new GraphLayoutEngine { NodeWidth = 200, NodeHeight = 48 }.Layout(graph, LayoutKind.Layered);
-        _graphView.SetGraph(graph);
-        _graphView.FitToContent();     // call after control has Bounds (hook Loaded / LayoutUpdated)
-        */
-
         var previous = (_menu, _toolbar, _structureTree, _diagnosticsPanel, _astViewer,
             _statusFile, _statusGit, _statusDiagnostics, _statusPosition, _statusMode,
             _sideTabs, _filesTreeView, _outputTabs, _mainGrid, _outputDock,
@@ -1271,6 +1264,8 @@ public partial class MainWindow : Window
         // === File Menu ===
         _menu.SetRecentProjects(SettingsData.Instance.GetRecentProjectPaths().Where(Directory.Exists));
         _menu.OnNewNotebook += AddNotebookTab;
+        _menu.OnOpenCallFlowGraph += () => AddGraphTab(false);
+        _menu.OnOpenControlFlowGraph += () => AddGraphTab(true);
         _menu.OnNewCodeAnalysis += AddCodeAnalysisTab;
         _menu.OnNewProject += () => { /* TODO: Implement new project */ };
         _menu.OnOpenFile += async () =>
@@ -1884,6 +1879,55 @@ public partial class MainWindow : Window
 
         // Case C: If you use a custom NotebookWidget, you'd check for that here
         return null;
+    }
+
+    private void AddGraphTab(bool controlFlow)
+    {
+        if (_tabs.SelectedItem is TabItem selected && FindEditorInContent(selected.Content) is CodeEditor editor)
+        {
+            _graphSourceDocument = editor.DocumentId;
+            _graphSourceOffset = editor._editor.CaretOffset;
+        }
+
+        var existing = _tabs.Items.OfType<TabItem>().FirstOrDefault(tab =>
+            tab.Content is FlowGraphWidget widget && widget.IsControlFlow == controlFlow);
+        if (existing != null)
+        {
+            _tabs.SelectedItem = existing;
+            _ = ((FlowGraphWidget)existing.Content!).RefreshAsync();
+            return;
+        }
+
+        var graph = new FlowGraphWidget(_workspace, () => _projectId,
+            () => (_graphSourceDocument, _graphSourceOffset), controlFlow);
+        var tab = new TabItem { Content = graph };
+        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        header.Children.Add(new TextBlock
+        {
+            Text = controlFlow ? "Control Flow Graph" : "Call Flow Graph",
+            Foreground = Brushes.White,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        var close = new Button
+        {
+            Content = new SymbolIcon { Symbol = Symbol.Cancel, FontSize = 12 },
+            Padding = new Thickness(2),
+            Background = Brushes.Transparent,
+            Foreground = Brushes.White,
+            BorderThickness = new Thickness(0)
+        };
+        ToolTip.SetTip(close, "Close graph");
+        close.Click += (_, args) =>
+        {
+            args.Handled = true;
+            graph.Dispose();
+            _tabs.Items.Remove(tab);
+        };
+        header.Children.Add(close);
+        tab.Header = header;
+        _tabs.Items.Add(tab);
+        _tabs.SelectedItem = tab;
+        _ = graph.RefreshAsync();
     }
 
     private void AddNotebookTab()

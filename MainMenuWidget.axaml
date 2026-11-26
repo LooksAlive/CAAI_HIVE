@@ -40,6 +40,9 @@
             </MenuItem>
 
             <MenuItem Header="_View" Foreground="White">
+                <MenuItem Header="_Call Flow Graph" Name="MenuCallFlowGraph" Foreground="White"/>
+                <MenuItem Header="Control _Flow Graph" Name="MenuControlFlowGraph" Foreground="White"/>
+                <Separator/>
                 <MenuItem Header="📁 File Explorer" ToggleType="CheckBox" IsChecked="True" Name="MenuToggleExplorer" Foreground="White"/>
                 <MenuItem Header="📐 Code Structure" ToggleType="CheckBox" IsChecked="True" Name="MenuToggleStructure" Foreground="White"/>
                 <MenuItem Header="📋 Output Window" ToggleType="CheckBox" IsChecked="True" Name="MenuToggleOutput" Foreground="White"/>

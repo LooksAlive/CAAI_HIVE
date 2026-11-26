@@ -60,17 +60,17 @@ public sealed class ControlFlowGraphModel
         {
             var ordinal = block.Ordinal;
             var kind = block.Kind.ToString(); // Entry / Exit / Block / etc.
-            var firstOp = block.Operations.FirstOrDefault();
-            var label = firstOp != null
-                ? $"{kind} #{ordinal}\n{firstOp.Kind}"
-                : $"{kind} #{ordinal}";
+            var statements = block.Operations.Select(operation => operation.Syntax.ToString()).ToList();
+            if (block.BranchValue != null) statements.Add(block.BranchValue.Syntax.ToString());
+            var label = string.Join(" ", statements.Select(statement => string.Join(" ",
+                statement.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))));
 
             var node = new CfgNode
             {
                 Id = $"B{ordinal}",
                 Ordinal = ordinal,
                 Kind = kind,
-                Label = label,
+                Label = string.IsNullOrEmpty(label) ? kind : label,
                 IsEntry = block.Kind == BasicBlockKind.Entry,
                 IsExit = block.Kind == BasicBlockKind.Exit,
             };
@@ -86,13 +86,15 @@ public sealed class ControlFlowGraphModel
             if (block.FallThroughSuccessor != null)
             {
                 var succ = block.FallThroughSuccessor;
-                if (blockToNode.TryGetValue(succ.Destination, out var to))
+                if (succ.Destination != null && blockToNode.TryGetValue(succ.Destination, out var to))
                 {
                     model.Edges.Add(new CfgEdge
                     {
                         FromId = from.Id,
                         ToId = to.Id,
-                        Condition = succ.Semantics == ControlFlowBranchSemantics.Regular ? null : succ.Semantics.ToString(),
+                        Condition = block.ConditionKind != ControlFlowConditionKind.None
+                            ? (block.ConditionKind == ControlFlowConditionKind.WhenTrue ? "False" : "True")
+                            : succ.Semantics == ControlFlowBranchSemantics.Regular ? null : succ.Semantics.ToString(),
                     });
                 }
             }
@@ -101,13 +103,13 @@ public sealed class ControlFlowGraphModel
             if (block.ConditionalSuccessor != null)
             {
                 var succ = block.ConditionalSuccessor;
-                if (blockToNode.TryGetValue(succ.Destination, out var to))
+                if (succ.Destination != null && blockToNode.TryGetValue(succ.Destination, out var to))
                 {
                     model.Edges.Add(new CfgEdge
                     {
                         FromId = from.Id,
                         ToId = to.Id,
-                        Condition = succ.Semantics.ToString(),
+                        Condition = block.ConditionKind == ControlFlowConditionKind.WhenTrue ? "True" : "False",
                     });
                 }
             }
@@ -127,6 +129,7 @@ public sealed class ControlFlowGraphModel
     // 简单网格布局，够用
     public void ApplyGridLayout(int cols = 4)
     {
+        cols = Math.Max(1, cols);
         for (int i = 0; i < Nodes.Count; i++)
         {
             Nodes[i].X = 60 + (i % cols) * 260;

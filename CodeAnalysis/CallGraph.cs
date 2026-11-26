@@ -35,14 +35,60 @@ public sealed class CallEdge
 {
     public string FromId { get; init; } = "";
     public string ToId { get; init; } = "";
-    public int Weight { get; set; } = 1;
+    public string? Label { get; init; }
+    public int Weight { get; set; }
     public List<TextSpan> CallSites { get; init; } = new();
 }
+
+public enum CallFlowDirection { Callees, Callers, Both }
 
 public sealed class CallGraph
 {
     public Dictionary<string, CallNode> Nodes { get; } = new();
     public List<CallEdge> Edges { get; } = new();
+
+    public (CallGraph Graph, bool IsTruncated) Focus(string methodId,
+        CallFlowDirection direction = CallFlowDirection.Callees, int depth = 2, int maxNodes = 80)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(depth);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxNodes, 1);
+        var result = new CallGraph();
+        if (!Nodes.ContainsKey(methodId)) return (result, false);
+
+        var neighbors = Nodes.Keys.ToDictionary(id => id, _ => new List<string>());
+        foreach (var edge in Edges)
+        {
+            if (!Nodes.ContainsKey(edge.FromId) || !Nodes.ContainsKey(edge.ToId)) continue;
+            if (direction is CallFlowDirection.Callees or CallFlowDirection.Both)
+                neighbors[edge.FromId].Add(edge.ToId);
+            if (direction is CallFlowDirection.Callers or CallFlowDirection.Both)
+                neighbors[edge.ToId].Add(edge.FromId);
+        }
+
+        var included = new HashSet<string> { methodId };
+        var pending = new Queue<(string Id, int Depth)>();
+        pending.Enqueue((methodId, 0));
+        var truncated = false;
+        while (pending.TryDequeue(out var current))
+        {
+            if (current.Depth >= depth) continue;
+            foreach (var neighbor in neighbors[current.Id])
+            {
+                if (included.Contains(neighbor)) continue;
+                if (included.Count >= maxNodes)
+                {
+                    truncated = true;
+                    continue;
+                }
+                included.Add(neighbor);
+                pending.Enqueue((neighbor, current.Depth + 1));
+            }
+        }
+
+        foreach (var id in included) result.Nodes[id] = Nodes[id];
+        result.Edges.AddRange(Edges.Where(edge => included.Contains(edge.FromId) && included.Contains(edge.ToId)));
+        return (result, truncated);
+    }
 
     public CallNode GetOrAddNode(IMethodSymbol symbol)
     {
@@ -65,8 +111,6 @@ public sealed class CallGraph
 
     public void AddEdge(IMethodSymbol from, IMethodSymbol to, TextSpan site)
     {
-        if (SymbolEqualityComparer.Default.Equals(from, to)) return;
-
         var fromNode = GetOrAddNode(from);
         var toNode = GetOrAddNode(to);
         fromNode.CallCount++;
@@ -82,8 +126,9 @@ public sealed class CallGraph
     }
 
     public static string GetId(IMethodSymbol symbol) =>
-        symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) + "|" +
-        string.Join(",", symbol.Parameters.Select(p => p.Type.ToDisplayString()));
+        symbol.ContainingAssembly.Identity + "|" +
+        (symbol.OriginalDefinition.GetDocumentationCommentId()
+            ?? symbol.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat));
 }
 
 // ---------------- Extractor ----------------
@@ -119,6 +164,7 @@ public sealed class CallGraphExtractor
                 ct.ThrowIfCancellationRequested();
 
                 if (model.GetDeclaredSymbol(decl, ct) is not IMethodSymbol caller) continue;
+                graph.GetOrAddNode(caller);
 
                 var invocations = decl.DescendantNodes()
                     .OfType<InvocationExpressionSyntax>();
@@ -131,8 +177,7 @@ public sealed class CallGraphExtractor
                     if (target == null) continue;
 
                     // Reduce constructed generics back to their definition for stable identity.
-                    if (target.IsGenericMethod && !target.IsDefinition)
-                        target = target.OriginalDefinition;
+                    target = (target.ReducedFrom ?? target).OriginalDefinition;
 
                     bool inSource = target.Locations.Any(l => l.IsInSource);
                     if (!inSource && !includeExternalCalls) continue;
@@ -178,6 +223,7 @@ public sealed class GraphLayoutEngine
 
     public void Layout(CallGraph graph, LayoutKind kind = LayoutKind.Layered)
     {
+        if (graph.Nodes.Count == 0) return;
         foreach (var n in graph.Nodes.Values)
         {
             n.Width = NodeWidth;
